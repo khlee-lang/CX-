@@ -224,7 +224,7 @@ export default async function handler(req, res) {
     const jwt = getJwt();
 
     // 단일 컬럼으로 행 수 파악 (경량, 빠름)
-    const WINDOW = 3000;
+    const WINDOW = 7000;
     const [retCountCol, excCountCol] = await Promise.all([
       sheetsGet(jwt, RETURNS_SS_ID, "'판토스_입고리스트'!J:J"),   // 주문번호 열
       sheetsGet(jwt, EXCHANGE_SS_ID, "'[자사몰] 교환'!G:G"),      // 주문번호 열

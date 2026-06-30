@@ -196,7 +196,7 @@ app.post('/api/reconcile', async (req, res) => {
   }
 
   try {
-    const [retRows, excRows] = await Promise.all([sheetsGet(RETURNS_SS_ID,'C:O'), sheetsGet(EXCHANGE_SS_ID,"'[자사몰] 교환'!B:K")]);
+    const [retRows, excRows] = await Promise.all([sheetsGet(RETURNS_SS_ID,"'판토스_입고리스트'!C:O"), sheetsGet(EXCHANGE_SS_ID,"'[자사몰] 교환'!B:K")]);
     const {actions,issues} = reconcile(parseReturns(retRows), parseExchanges(excRows), today);
     let applied = null;
     if (apply && actions.length > 0) {

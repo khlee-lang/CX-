@@ -223,7 +223,7 @@ export default async function handler(req, res) {
     const jwt = getJwt();
 
     const [retRows, excRows] = await Promise.all([
-      sheetsGet(jwt, RETURNS_SS_ID, 'C:O'),
+      sheetsGet(jwt, RETURNS_SS_ID, "'판토스_입고리스트'!C:O"),
       sheetsGet(jwt, EXCHANGE_SS_ID, "'[자사몰] 교환'!B:K"),
     ]);
 

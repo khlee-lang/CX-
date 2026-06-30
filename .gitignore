@@ -1,0 +1,29 @@
+# 민감 정보 — 절대 커밋 금지
+*.json
+!cx-exchange-dashboard/package.json
+!cx-exchange-dashboard/package-lock.json
+!cx-exchange-dashboard/tsconfig*.json
+!cx-exchange-dashboard/eslint.config.js
+!cx-exchange-dashboard/server/package.json
+!cx-exchange-dashboard/server/package-lock.json
+stitch_assets/
+
+# 로그
+*.log
+logs/
+
+# 파이썬
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# node
+node_modules/
+dist/
+dist-ssr/
+
+# 환경변수
+.env
+.env.local

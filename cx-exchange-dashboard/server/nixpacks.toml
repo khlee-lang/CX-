@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_22", "python3", "python3Packages.pip"]
+
+[phases.install]
+cmds = [
+  "npm install",
+  "pip3 install requests"
+]
+
+[start]
+cmd = "node index.js"

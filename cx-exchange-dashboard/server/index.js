@@ -9,10 +9,20 @@ require('dotenv').config();
 const app = express();
 const port = 3001;
 
-app.use(cors());
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['http://localhost:5173'];
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
-const creds = require('./service-account.json');
+// 배포: GOOGLE_SERVICE_ACCOUNT_JSON 환경변수(JSON 문자열)를 우선 사용
+// 로컬: service-account.json 파일 fallback
+let creds;
+if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+  creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+} else {
+  creds = require('./service-account.json');
+}
 
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
@@ -152,8 +162,8 @@ app.post('/api/send-alimtalk', async (req, res) => {
   // ── Python 기반 알림톡 엔진 호출 ──────────────────────────────
   try {
     const { exec } = require('child_process');
-    const pythonPath = '/usr/bin/python3';
-    const scriptPath = '/Users/deepdive/Documents/강희/Github/교환대시보드/send_single_python.py';
+    const pythonPath = process.env.PYTHON_PATH || '/usr/bin/python3';
+    const scriptPath = process.env.PYTHON_SCRIPT_PATH || path.join(__dirname, '../../send_single_python.py');
     
     // Python 실행 - 행 전체 데이터를 JSON으로 전달
     const payload = JSON.stringify({ row, rowIndex, sheetTitle });

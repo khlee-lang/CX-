@@ -8,7 +8,7 @@ export interface ExchangeData {
   };
 }
 
-const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
 
 export const fetchDashboardData = async (): Promise<ExchangeData> => {
   const response = await fetch(`${API_BASE_URL}/dashboard-data`);

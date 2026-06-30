@@ -36,12 +36,6 @@ const DEFECT_CATEGORIES = [
 
 const ALL_DEFECT_KEYWORDS = DEFECT_CATEGORIES.flatMap(c => c.keywords);
 
-const getCategoryForRow = (reason: string): string | null => {
-  for (const cat of DEFECT_CATEGORIES) {
-    if (cat.keywords.some(k => reason.includes(k))) return cat.key;
-  }
-  return null;
-};
 
 // ── 컴포넌트 ───────────────────────────────────────────────────
 export const DefectiveAnalysis: React.FC = () => {

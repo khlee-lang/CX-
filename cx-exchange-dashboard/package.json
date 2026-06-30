@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@iconify/react": "^6.0.2",
+    "google-auth-library": "^10.6.2",
+    "google-spreadsheet": "^5.2.0",
     "lucide-react": "^1.7.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

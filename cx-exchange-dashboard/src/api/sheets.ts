@@ -8,7 +8,9 @@ export interface ExchangeData {
   };
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
+// 로컬: Vite proxy가 /api → localhost:3001 으로 포워딩
+// 배포(Vercel): 같은 도메인의 /api 서버리스 함수로 바로 연결
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export const fetchDashboardData = async (): Promise<ExchangeData> => {
   const response = await fetch(`${API_BASE_URL}/dashboard-data`);

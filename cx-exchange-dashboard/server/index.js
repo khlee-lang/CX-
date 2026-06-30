@@ -108,6 +108,111 @@ app.patch('/api/update-cell', async (req, res) => {
   }
 });
 
+// ── POST: 반품입고-교환 연동 ─────────────────────────────────────
+app.post('/api/reconcile', async (req, res) => {
+  const { apply = false, today = new Date().toISOString().slice(0, 10) } = req.body || {};
+
+  const RETURNS_SS_ID  = '1B6UKmborJQCAKIrIBziAFMjKR0CfY8Jul1E_Rbs5C3Y';
+  const EXCHANGE_SS_ID = '1cqLifjcihpHlAUN9ZcG19uJ9MhdkYcOxLzMDPcaBufg';
+
+  const localJwt = new JWT({ email: creds.client_email, key: creds.private_key, scopes: SCOPES });
+
+  async function sheetsGet(ssId, range) {
+    const { token } = await localJwt.getAccessToken();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values/${encodeURIComponent(range)}`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'Sheets GET 오류');
+    return d.values || [];
+  }
+
+  async function sheetsBatchUpdate(ssId, updates) {
+    const { token } = await localJwt.getAccessToken();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values:batchUpdate`;
+    const r = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data: updates }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || 'batchUpdate 오류');
+  }
+
+  function rowColToA1(row, col) {
+    let s = '', c = col;
+    while (c > 0) { s = String.fromCharCode(64 + (c % 26 || 26)) + s; c = Math.floor((c - 1) / 26); }
+    return `${s}${row}`;
+  }
+  function nextShippingDate(d) {
+    const dt = new Date(d); dt.setDate(dt.getDate() + 1);
+    const day = dt.getDay();
+    if (day === 6) dt.setDate(dt.getDate() + 2); else if (day === 0) dt.setDate(dt.getDate() + 1);
+    return dt.toISOString().slice(0, 10);
+  }
+  function arrivalTag(d) { const dt = new Date(d); return `입고${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}`; }
+  function sg(row, i) { return (row?.[i] ?? '').toString().trim(); }
+
+  const VALID_PAY = new Set(['', '무상', '입금확인', '무료교환', '차감']);
+
+  function parseReturns(rows) {
+    const g = {};
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (sg(r,0)) continue; if (sg(r,2) !== '자사몰교환') continue;
+      const o = sg(r,7); if (!o) continue;
+      if (!g[o]) g[o] = [];
+      g[o].push({ row: i+1, item: sg(r,10), qty: parseInt(sg(r,12)||sg(r,11))||0 });
+    }
+    return g;
+  }
+  function parseExchanges(rows) {
+    const g = {};
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i]; const o = sg(r,5); if (!o) continue;
+      if (!g[o]) g[o] = [];
+      g[o].push({ row: i+1, itemKey: sg(r,7)+sg(r,6), qty: parseInt(sg(r,9))||0, pay: sg(r,3), newOpt: sg(r,8) });
+    }
+    return g;
+  }
+  function counterEqual(ret, exc) {
+    const cR={}, cE={};
+    for (const r of ret) cR[r.item]=(cR[r.item]||0)+r.qty;
+    for (const r of exc) cE[r.itemKey]=(cE[r.itemKey]||0)+r.qty;
+    const kR=Object.keys(cR).sort(), kE=Object.keys(cE).sort();
+    if (kR.length!==kE.length) return false;
+    return kR.every((k,i)=>k===kE[i]&&cR[k]===cE[k]);
+  }
+  function reconcile(rg, eg, t) {
+    const actions=[], issues=[];
+    for (const [o, retRows] of Object.entries(rg)) {
+      const excRows = eg[o];
+      if (!excRows) { issues.push({order_no:o,issue_type:'주문없음',description:'교환접수시트에 해당 주문번호가 없습니다.',return_rows:retRows.map(r=>r.row)}); continue; }
+      if (!counterEqual(retRows,excRows)) { issues.push({order_no:o,issue_type:'상품불일치',description:'반품입고와 교환접수의 상품/옵션/수량이 일치하지 않습니다.',return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
+      const pays=new Set(excRows.map(r=>r.pay));
+      if (pays.size>1) { issues.push({order_no:o,issue_type:'지불방법혼재',description:`지불방법이 여럿: ${[...pays].join(', ')}`,return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
+      const pay=[...pays][0]; let shipDate, reason;
+      if (pay==='입금요청') { shipDate=arrivalTag(t); reason='지불방법=입금요청 → 입고MMDD'; }
+      else if (VALID_PAY.has(pay)) { if (excRows.every(r=>r.newOpt)) { shipDate=nextShippingDate(t); reason=`지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`; } else { shipDate=arrivalTag(t); reason=`지불방법='${pay}', 출고옵션 일부 비어있음 → 입고MMDD`; } }
+      else { issues.push({order_no:o,issue_type:'알수없는지불방법',description:`지불방법='${pay}'`,return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
+      actions.push({order_no:o,exchange_rows:excRows.map(r=>r.row),return_rows:retRows.map(r=>r.row),ship_date:shipDate,done_date:t,reason});
+    }
+    return {actions,issues};
+  }
+
+  try {
+    const [retRows, excRows] = await Promise.all([sheetsGet(RETURNS_SS_ID,'C:O'), sheetsGet(EXCHANGE_SS_ID,'B:K')]);
+    const {actions,issues} = reconcile(parseReturns(retRows), parseExchanges(excRows), today);
+    let applied = null;
+    if (apply && actions.length > 0) {
+      const excU = actions.flatMap(a=>a.exchange_rows.map(r=>({range:rowColToA1(r,2),values:[[a.ship_date]]})));
+      const retU = actions.flatMap(a=>a.return_rows.map(r=>({range:rowColToA1(r,3),values:[[a.done_date]]})));
+      if (excU.length) await sheetsBatchUpdate(EXCHANGE_SS_ID, excU);
+      if (retU.length) await sheetsBatchUpdate(RETURNS_SS_ID, retU);
+      applied = {excUpdated:excU.length, retUpdated:retU.length};
+    }
+    res.json({actions,issues,applied,today});
+  } catch (err) {
+    console.error('[reconcile]', err);
+    res.status(500).json({error: err.message});
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });

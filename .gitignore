@@ -6,6 +6,7 @@
 !cx-exchange-dashboard/eslint.config.js
 !cx-exchange-dashboard/server/package.json
 !cx-exchange-dashboard/server/package-lock.json
+!cx-exchange-dashboard/vercel.json
 stitch_assets/
 
 # 로그

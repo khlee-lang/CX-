@@ -40,8 +40,16 @@ export const Sidebar: React.FC = () => {
         
         <div className="pt-4 mt-4 border-t border-slate-200/60">
           <NavLink to="/report-center" className={({isActive}) => `flex items-center gap-3 px-4 py-3 font-bold rounded-xl text-sm tracking-tight transition-all duration-200 ${isActive ? 'bg-indigo-600 text-white shadow-lg' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}>
-            <Icon name="auto_awesome" className="text-lg" style={{ fontVariationSettings: "'FILL' 1" }} /> 
+            <Icon name="auto_awesome" className="text-lg" style={{ fontVariationSettings: "'FILL' 1" }} />
             <span className="text-sm tracking-tight">AI 리포트 센터</span>
+          </NavLink>
+        </div>
+
+        <div className="pt-4 mt-2 border-t border-slate-200/60">
+          <p className="px-3 mb-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">자동화</p>
+          <NavLink to="/reconcile" className={navLinkClasses}>
+            <Icon name="sync_alt" />
+            <span className="text-sm tracking-tight">반품-교환 연동</span>
           </NavLink>
         </div>
       </nav>

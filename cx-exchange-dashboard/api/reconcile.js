@@ -201,10 +201,10 @@ function reconcile(returnsGroups, exchangeGroups, today) {
 // ── 시트 반영 ────────────────────────────────────────────────────
 async function applyActions(jwt, actions) {
   const excUpdates = actions.flatMap(act =>
-    act.exchange_rows.map(row => ({ range: rowColToA1(row, WRITE_E_SHIP_COL), values: [[act.ship_date]] }))
+    act.exchange_rows.map(row => ({ range: `'[자사몰] 교환'!${rowColToA1(row, WRITE_E_SHIP_COL)}`, values: [[act.ship_date]] }))
   );
   const retUpdates = actions.flatMap(act =>
-    act.return_rows.map(row => ({ range: rowColToA1(row, WRITE_R_DONE_COL), values: [[act.done_date]] }))
+    act.return_rows.map(row => ({ range: `'판토스_입고리스트'!${rowColToA1(row, WRITE_R_DONE_COL)}`, values: [[act.done_date]] }))
   );
 
   if (excUpdates.length) await sheetsBatchUpdate(jwt, EXCHANGE_SS_ID, excUpdates);

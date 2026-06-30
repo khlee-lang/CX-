@@ -200,8 +200,8 @@ app.post('/api/reconcile', async (req, res) => {
     const {actions,issues} = reconcile(parseReturns(retRows), parseExchanges(excRows), today);
     let applied = null;
     if (apply && actions.length > 0) {
-      const excU = actions.flatMap(a=>a.exchange_rows.map(r=>({range:rowColToA1(r,2),values:[[a.ship_date]]})));
-      const retU = actions.flatMap(a=>a.return_rows.map(r=>({range:rowColToA1(r,3),values:[[a.done_date]]})));
+      const excU = actions.flatMap(a=>a.exchange_rows.map(r=>({range:`'[자사몰] 교환'!${rowColToA1(r,2)}`,values:[[a.ship_date]]})));
+      const retU = actions.flatMap(a=>a.return_rows.map(r=>({range:`'판토스_입고리스트'!${rowColToA1(r,3)}`,values:[[a.done_date]]})));
       if (excU.length) await sheetsBatchUpdate(EXCHANGE_SS_ID, excU);
       if (retU.length) await sheetsBatchUpdate(RETURNS_SS_ID, retU);
       applied = {excUpdated:excU.length, retUpdated:retU.length};

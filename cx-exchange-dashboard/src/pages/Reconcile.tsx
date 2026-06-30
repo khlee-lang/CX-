@@ -50,7 +50,9 @@ export const Reconcile: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apply }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { throw new Error(`서버 응답 오류 (${res.status}): ${text.slice(0, 200)}`); }
       if (!res.ok) throw new Error(data.error || '서버 오류');
       setResult(data);
       setStatus(apply ? 'done' : 'preview');

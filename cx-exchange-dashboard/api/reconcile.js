@@ -94,9 +94,10 @@ const WRITE_E_SHIP_COL = 2; // B열
 const VALID_PAY = new Set(['', '무상', '입금확인', '무료교환', '차감']);
 
 // ── 파싱 ─────────────────────────────────────────────────────────
-function parseReturns(rows) {
+// rowOffset: 시트에서 실제 읽기 시작한 행번호 (1-based)
+function parseReturns(rows, rowOffset) {
   const groups = {};
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (safeGet(row, RC_DONE_DATE)) continue;
     if (safeGet(row, RC_CATEGORY) !== '자사몰교환') continue;
@@ -106,14 +107,14 @@ function parseReturns(rows) {
     const qtyRaw = safeGet(row, RC_REAL_QTY) || safeGet(row, RC_QTY);
     const qty = parseInt(qtyRaw) || 0;
     if (!groups[orderNo]) groups[orderNo] = [];
-    groups[orderNo].push({ row: i + 1, item, qty }); // 1-based 시트 행번호
+    groups[orderNo].push({ row: rowOffset + i, item, qty });
   }
   return groups;
 }
 
-function parseExchanges(rows) {
+function parseExchanges(rows, rowOffset) {
   const groups = {};
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const orderNo = safeGet(row, EC_ORDER_NO);
     if (!orderNo) continue;
@@ -121,7 +122,7 @@ function parseExchanges(rows) {
     const qty = parseInt(safeGet(row, EC_QTY)) || 0;
     if (!groups[orderNo]) groups[orderNo] = [];
     groups[orderNo].push({
-      row: i + 1,
+      row: rowOffset + i,
       itemKey,
       qty,
       pay: safeGet(row, EC_PAY_METHOD),
@@ -222,13 +223,23 @@ export default async function handler(req, res) {
   try {
     const jwt = getJwt();
 
+    // 단일 컬럼으로 행 수 파악 (경량, 빠름)
+    const WINDOW = 3000;
+    const [retCountCol, excCountCol] = await Promise.all([
+      sheetsGet(jwt, RETURNS_SS_ID, "'판토스_입고리스트'!J:J"),   // 주문번호 열
+      sheetsGet(jwt, EXCHANGE_SS_ID, "'[자사몰] 교환'!G:G"),      // 주문번호 열
+    ]);
+    const retStart = Math.max(2, retCountCol.length - WINDOW + 1);
+    const excStart = Math.max(2, excCountCol.length - WINDOW + 1);
+
+    // 최근 N행만 읽기 (헤더 없이 데이터만)
     const [retRows, excRows] = await Promise.all([
-      sheetsGet(jwt, RETURNS_SS_ID, "'판토스_입고리스트'!C:O"),
-      sheetsGet(jwt, EXCHANGE_SS_ID, "'[자사몰] 교환'!B:K"),
+      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!C${retStart}:O`),
+      sheetsGet(jwt, EXCHANGE_SS_ID, `'[자사몰] 교환'!B${excStart}:K`),
     ]);
 
-    const returnsGroups  = parseReturns(retRows);
-    const exchangeGroups = parseExchanges(excRows);
+    const returnsGroups  = parseReturns(retRows, retStart);
+    const exchangeGroups = parseExchanges(excRows, excStart);
 
     const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today);
 

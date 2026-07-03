@@ -18,26 +18,48 @@ function getJwt() {
 }
 
 // ── Sheets REST API ───────────────────────────────────────────────
+async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// 구글 API가 가끔 주는 일시적 오류(503 등)는 잠깐 기다렸다 재시도
+async function withRetry(fn, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const transient = /unavailable|internal error|rate limit|timeout/i.test(err.message || '');
+      if (!transient || i === tries - 1) throw err;
+      await sleep(1000 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
 async function sheetsGet(jwt, ssId, range) {
-  const { token } = await jwt.getAccessToken();
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values/${encodeURIComponent(range)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'Sheets GET 오류');
-  return data.values || [];
+  return withRetry(async () => {
+    const { token } = await jwt.getAccessToken();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values/${encodeURIComponent(range)}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Sheets GET 오류');
+    return data.values || [];
+  });
 }
 
 async function sheetsBatchUpdate(jwt, ssId, updates) {
-  const { token } = await jwt.getAccessToken();
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values:batchUpdate`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data: updates }),
+  return withRetry(async () => {
+    const { token } = await jwt.getAccessToken();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values:batchUpdate`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data: updates }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Sheets batchUpdate 오류');
+    return data;
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || 'Sheets batchUpdate 오류');
-  return data;
 }
 
 // ── 유틸 ─────────────────────────────────────────────────────────

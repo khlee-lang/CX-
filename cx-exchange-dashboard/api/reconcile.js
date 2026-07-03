@@ -20,7 +20,31 @@ function getJwt() {
 // ── Sheets REST API ───────────────────────────────────────────────
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// 구글 API가 가끔 주는 일시적 오류(503 등)는 잠깐 기다렸다 재시도
+const FETCH_TIMEOUT_MS = 20000;
+
+// jwt.getAccessToken()도 내부적으로 네트워크 호출이라 응답이 멈출 수 있음 → 타임아웃 적용
+async function getAccessTokenWithTimeout(jwt) {
+  return Promise.race([
+    jwt.getAccessToken(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`토큰 발급 응답 없음 (${FETCH_TIMEOUT_MS / 1000}초 초과)`)), FETCH_TIMEOUT_MS)),
+  ]);
+}
+
+// 구글 서버가 응답 없이 멈춰버리는 경우, 무한 대기하지 않고 일정 시간 후 강제 실패 처리
+async function fetchWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error(`Sheets API 응답 없음 (${FETCH_TIMEOUT_MS / 1000}초 초과)`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 구글 API가 가끔 주는 일시적 오류(503 등)나 무응답은 잠깐 기다렸다 재시도
 async function withRetry(fn, tries = 3) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
@@ -28,7 +52,7 @@ async function withRetry(fn, tries = 3) {
       return await fn();
     } catch (err) {
       lastErr = err;
-      const transient = /unavailable|internal error|rate limit|timeout/i.test(err.message || '');
+      const transient = /unavailable|internal error|rate limit|timeout|응답 없음/i.test(err.message || '');
       if (!transient || i === tries - 1) throw err;
       await sleep(1000 * (i + 1));
     }
@@ -38,9 +62,9 @@ async function withRetry(fn, tries = 3) {
 
 async function sheetsGet(jwt, ssId, range) {
   return withRetry(async () => {
-    const { token } = await jwt.getAccessToken();
+    const { token } = await getAccessTokenWithTimeout(jwt);
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values/${encodeURIComponent(range)}`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Sheets GET 오류');
     return data.values || [];
@@ -50,9 +74,9 @@ async function sheetsGet(jwt, ssId, range) {
 // 시트 전체 크기(빈 행 포함) — 데이터 없이 속성만 조회, 빠름
 async function getSheetRowCount(jwt, ssId, sheetName) {
   return withRetry(async () => {
-    const { token } = await jwt.getAccessToken();
+    const { token } = await getAccessTokenWithTimeout(jwt);
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}?fields=sheets.properties(title,gridProperties.rowCount)`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || 'Sheets 메타 조회 오류');
     const sheet = data.sheets.find(s => s.properties.title === sheetName);
@@ -76,9 +100,9 @@ async function findLastDataRow(jwt, ssId, sheetName, colLetter, chunkSize = 1000
 
 async function sheetsBatchUpdate(jwt, ssId, updates) {
   return withRetry(async () => {
-    const { token } = await jwt.getAccessToken();
+    const { token } = await getAccessTokenWithTimeout(jwt);
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values:batchUpdate`;
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ valueInputOption: 'USER_ENTERED', data: updates }),

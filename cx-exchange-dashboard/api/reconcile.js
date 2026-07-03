@@ -47,6 +47,33 @@ async function sheetsGet(jwt, ssId, range) {
   });
 }
 
+// 시트 전체 크기(빈 행 포함) — 데이터 없이 속성만 조회, 빠름
+async function getSheetRowCount(jwt, ssId, sheetName) {
+  return withRetry(async () => {
+    const { token } = await jwt.getAccessToken();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}?fields=sheets.properties(title,gridProperties.rowCount)`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Sheets 메타 조회 오류');
+    const sheet = data.sheets.find(s => s.properties.title === sheetName);
+    return sheet?.properties.gridProperties.rowCount ?? 0;
+  });
+}
+
+// 열 전체를 한 번에 읽지 않고, 뒤에서부터 CHUNK 단위로 나눠 읽으며
+// 데이터가 있는 마지막 행을 찾는다 (거대한 단일 요청으로 인한 503 방지)
+async function findLastDataRow(jwt, ssId, sheetName, colLetter, chunkSize = 10000, maxChunks = 15) {
+  const totalRows = await getSheetRowCount(jwt, ssId, sheetName);
+  let end = totalRows;
+  for (let i = 0; i < maxChunks && end >= 2; i++) {
+    const start = Math.max(2, end - chunkSize + 1);
+    const rows = await sheetsGet(jwt, ssId, `'${sheetName}'!${colLetter}${start}:${colLetter}${end}`);
+    if (rows.length > 0) return start + rows.length - 1; // API가 뒤쪽 빈 셀은 잘라서 반환
+    end = start - 1;
+  }
+  return 1; // 데이터를 찾지 못함
+}
+
 async function sheetsBatchUpdate(jwt, ssId, updates) {
   return withRetry(async () => {
     const { token } = await jwt.getAccessToken();
@@ -264,14 +291,14 @@ export default async function handler(req, res) {
   try {
     const jwt = getJwt();
 
-    // 단일 컬럼으로 행 수 파악 (경량, 빠름)
+    // 마지막 데이터 행 파악 — 열 전체를 한 번에 읽지 않고 뒤에서부터 나눠 읽음
     const WINDOW = 7000;
-    const [retCountCol, excCountCol] = await Promise.all([
-      sheetsGet(jwt, RETURNS_SS_ID, "'판토스_입고리스트'!J:J"),   // 주문번호 열
-      sheetsGet(jwt, EXCHANGE_SS_ID, "'[자사몰] 교환'!G:G"),      // 주문번호 열
+    const [retLastRow, excLastRow] = await Promise.all([
+      findLastDataRow(jwt, RETURNS_SS_ID, '판토스_입고리스트', 'J'),   // 주문번호 열
+      findLastDataRow(jwt, EXCHANGE_SS_ID, '[자사몰] 교환', 'G'),      // 주문번호 열
     ]);
-    const retStart = Math.max(2, retCountCol.length - WINDOW + 1);
-    const excStart = Math.max(2, excCountCol.length - WINDOW + 1);
+    const retStart = Math.max(2, retLastRow - WINDOW + 1);
+    const excStart = Math.max(2, excLastRow - WINDOW + 1);
 
     // 최근 N행만 읽기 (헤더 없이 데이터만)
     const [retRows, excRows] = await Promise.all([

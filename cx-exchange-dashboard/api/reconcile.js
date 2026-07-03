@@ -83,6 +83,7 @@ const WRITE_R_DONE_COL = 3; // C열
 
 // ── 교환접수시트 (B:K) 인덱스 ────────────────────────────────────
 // B=0 출고일, E=3 지불방법, G=5 주문번호, H=6 교환전옵션, I=7 상품명, J=8 교환출고옵션, K=9 수량
+const EC_SHIP_DATE  = 0;
 const EC_PAY_METHOD = 3;
 const EC_ORDER_NO   = 5;
 const EC_PREV_OPT   = 6;
@@ -127,6 +128,7 @@ function parseExchanges(rows, rowOffset) {
       qty,
       pay: safeGet(row, EC_PAY_METHOD),
       newOpt: safeGet(row, EC_NEW_OPT),
+      existingShipDate: safeGet(row, EC_SHIP_DATE),
     });
   }
   return groups;
@@ -158,6 +160,22 @@ function reconcile(returnsGroups, exchangeGroups, today) {
 
     if (!counterEqual(retRows, excRows)) {
       issues.push({ order_no: orderNo, issue_type: '상품불일치', description: '반품입고와 교환접수의 상품/옵션/수량이 일치하지 않습니다.', return_rows: retRows.map(r => r.row), exchange_rows: excRows.map(r => r.row) });
+      continue;
+    }
+
+    // 선교환: 교환접수시트 출고일이 이미 채워져 있으면 반품이 나중에 들어온 것 →
+    // 출고일은 건드리지 않고, 반품입고시트 확인완료일만 기입
+    const existingShipDate = excRows.find(r => r.existingShipDate)?.existingShipDate;
+    if (existingShipDate) {
+      actions.push({
+        order_no: orderNo,
+        exchange_rows: excRows.map(r => r.row),
+        return_rows: retRows.map(r => r.row),
+        ship_date: `이미출고됨(${existingShipDate})`,
+        done_date: today,
+        reason: `${existingShipDate} 선출고 → 확인완료일만 기입`,
+        skipShipWrite: true,
+      });
       continue;
     }
 
@@ -193,6 +211,7 @@ function reconcile(returnsGroups, exchangeGroups, today) {
       ship_date: shipDate,
       done_date: today,
       reason,
+      skipShipWrite: false,
     });
   }
 
@@ -201,7 +220,7 @@ function reconcile(returnsGroups, exchangeGroups, today) {
 
 // ── 시트 반영 ────────────────────────────────────────────────────
 async function applyActions(jwt, actions) {
-  const excUpdates = actions.flatMap(act =>
+  const excUpdates = actions.filter(act => !act.skipShipWrite).flatMap(act =>
     act.exchange_rows.map(row => ({ range: `'[자사몰] 교환'!${rowColToA1(row, WRITE_E_SHIP_COL)}`, values: [[act.ship_date]] }))
   );
   const retUpdates = actions.flatMap(act =>

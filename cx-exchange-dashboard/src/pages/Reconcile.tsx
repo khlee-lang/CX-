@@ -77,7 +77,7 @@ export const Reconcile: React.FC = () => {
         <Icon name="info" className="mt-0.5 shrink-0" />
         <div className="space-y-1">
           <p><span className="font-bold">미리보기</span>를 먼저 실행해 결과를 확인한 뒤, 이상 없으면 <span className="font-bold">시트에 반영</span>하세요.</p>
-          <p className="text-indigo-500 dark:text-indigo-400">기준일: {today} · 시트 2개를 읽어야 해서 10~20초 걸릴 수 있어요.</p>
+          <p className="text-indigo-500 dark:text-indigo-400">기준일: {today}</p>
         </div>
       </div>
 

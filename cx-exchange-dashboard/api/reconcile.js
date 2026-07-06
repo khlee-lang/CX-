@@ -71,33 +71,6 @@ async function sheetsGet(jwt, ssId, range) {
   });
 }
 
-// 시트 전체 크기(빈 행 포함) — 데이터 없이 속성만 조회, 빠름
-async function getSheetRowCount(jwt, ssId, sheetName) {
-  return withRetry(async () => {
-    const { token } = await getAccessTokenWithTimeout(jwt);
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}?fields=sheets.properties(title,gridProperties.rowCount)`;
-    const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error?.message || 'Sheets 메타 조회 오류');
-    const sheet = data.sheets.find(s => s.properties.title === sheetName);
-    return sheet?.properties.gridProperties.rowCount ?? 0;
-  });
-}
-
-// 열 전체를 한 번에 읽지 않고, 뒤에서부터 CHUNK 단위로 나눠 읽으며
-// 데이터가 있는 마지막 행을 찾는다 (거대한 단일 요청으로 인한 503 방지)
-async function findLastDataRow(jwt, ssId, sheetName, colLetter, chunkSize = 10000, maxChunks = 15) {
-  const totalRows = await getSheetRowCount(jwt, ssId, sheetName);
-  let end = totalRows;
-  for (let i = 0; i < maxChunks && end >= 2; i++) {
-    const start = Math.max(2, end - chunkSize + 1);
-    const rows = await sheetsGet(jwt, ssId, `'${sheetName}'!${colLetter}${start}:${colLetter}${end}`);
-    if (rows.length > 0) return start + rows.length - 1; // API가 뒤쪽 빈 셀은 잘라서 반환
-    end = start - 1;
-  }
-  return 1; // 데이터를 찾지 못함
-}
-
 async function sheetsBatchUpdate(jwt, ssId, updates) {
   return withRetry(async () => {
     const { token } = await getAccessTokenWithTimeout(jwt);
@@ -315,23 +288,19 @@ export default async function handler(req, res) {
   try {
     const jwt = getJwt();
 
-    // 마지막 데이터 행 파악 — 열 전체를 한 번에 읽지 않고 뒤에서부터 나눠 읽음
-    const WINDOW = 7000;
-    const [retLastRow, excLastRow] = await Promise.all([
-      findLastDataRow(jwt, RETURNS_SS_ID, '판토스_입고리스트', 'J'),   // 주문번호 열
-      findLastDataRow(jwt, EXCHANGE_SS_ID, '[자사몰] 교환', 'G'),      // 주문번호 열
-    ]);
-    const retStart = Math.max(2, retLastRow - WINDOW + 1);
-    const excStart = Math.max(2, excLastRow - WINDOW + 1);
-
-    // 최근 N행만 읽기 (헤더 없이 데이터만)
+    // 반품입고시트(판토스_입고리스트)는 완료 건을 수동으로 주기적으로
+    // 히스토리 시트로 이관해 작게(미처리 건만) 유지하므로, 전체를 그냥
+    // 한 번에 읽는다. (예전엔 E열 거대 수식 때문에 청크로 나눠 읽어야
+    // 했지만, 그 수식은 코드로 대체되어 더 이상 문제가 되지 않음 —
+    // 업데이트기록.md 2026-07-06 참고)
+    const START_ROW = 3;
     const [retRows, excRows] = await Promise.all([
-      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!C${retStart}:O`),
-      sheetsGet(jwt, EXCHANGE_SS_ID, `'[자사몰] 교환'!B${excStart}:K`),
+      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!C${START_ROW}:O`),
+      sheetsGet(jwt, EXCHANGE_SS_ID, `'[자사몰] 교환'!B${START_ROW}:K`),
     ]);
 
-    const returnsGroups  = parseReturns(retRows, retStart);
-    const exchangeGroups = parseExchanges(excRows, excStart);
+    const returnsGroups  = parseReturns(retRows, START_ROW);
+    const exchangeGroups = parseExchanges(excRows, START_ROW);
 
     const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today);
 

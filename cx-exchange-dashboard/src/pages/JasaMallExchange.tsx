@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Icon } from '../components/ui/Icon';
 import { DateFilter } from '../components/ui/DateFilter';
 import { fetchDashboardData, type ExchangeData } from '../api/sheets';
-import { isShipped, swapDirection, type SwapDirection } from '../lib/exchange';
+import { isShipped, swapDirection, shippingFee as parseFee, type SwapDirection } from '../lib/exchange';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export const JasaMallExchange: React.FC = () => {
@@ -75,8 +75,7 @@ export const JasaMallExchange: React.FC = () => {
       if (isShipped(row)) done++;
       if (row['첫주문여부[자동]'] === '무료교환') free++;
       if ((row['교환형태'] || '').includes('선교환')) pre++;
-      const feeNum = parseInt((row['택배비'] || '').replace(/[^0-9]/g, ''), 10);
-      if (!isNaN(feeNum)) fee += feeNum;
+      fee += parseFee(row);
       const name = row['상품명']?.trim();
       if (name) {
         itemMap[name] = (itemMap[name] || 0) + 1;

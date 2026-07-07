@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Icon } from '../components/ui/Icon';
 import { DateFilter } from '../components/ui/DateFilter';
 import { fetchDashboardData, type ExchangeData } from '../api/sheets';
-import { shipStatus, isShipped, leadTimeDays, median, toISODate } from '../lib/exchange';
+import { shipStatus, isShipped, leadTimeDays, median, toISODate, needsRecovery, shippingFee, classifyDefect } from '../lib/exchange';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell
@@ -53,13 +54,15 @@ export const OverviewDashboard: React.FC = () => {
     loadData();
   }, []);
 
-  const { stats, chartData, pieData, topProducts, agingData, opsData } = useMemo(() => {
+  const { stats, chartData, pieData, topProducts, agingData, opsData, qualityAlerts, deptSummary } = useMemo(() => {
     if (!data || !startDate || !endDate) return {
       filteredData: { jasa: [], bulryang: [], oebu: [] },
       stats: { jasa: 0, bulryang: 0, oebu: 0, total: 0, mom: 0 },
       chartData: [], pieData: [], topProducts: [],
       agingData: { d3: 0, d5: 0, d7: 0, waitingStock: 0, notReceived: 0, pending: 0 },
-      opsData: { leadMedian: null as number | null, prevLeadMedian: null as number | null, shipRate: 0 }
+      opsData: { leadMedian: null as number | null, prevLeadMedian: null as number | null, shipRate: 0, recoveryOverdue: 0, totalFee: 0, repeatCustomers: 0 },
+      qualityAlerts: [] as { name: string; count: number; prevCount: number }[],
+      deptSummary: { topDefectProduct: null as { name: string; count: number } | null, freeRate: 0 }
     };
 
     const sDate = new Date(startDate);
@@ -174,13 +177,64 @@ export const OverviewDashboard: React.FC = () => {
     const leadTimes = allRows.map(leadTimeDays).filter((v): v is number => v !== null);
     const prevLeadTimes = [...prevJasa, ...prevOebu, ...prevBulryang].map(leadTimeDays).filter((v): v is number => v !== null);
     const shippedCount = allRows.filter(isShipped).length;
+
+    // 회수 지연 — 접수 후 7일+ 지났는데 아직 미집화 (자사몰+불량 시트만; 외부몰엔 회수내역 필드 없음)
+    const recoveryOverdue = [...jasa, ...bulryang].filter(r => {
+      if (!needsRecovery(r)) return false;
+      const reg = toISODate(r['접수일']);
+      if (!reg) return false;
+      const days = Math.floor((today.getTime() - new Date(reg).getTime()) / 86400000);
+      return days >= 7;
+    }).length;
+
+    // 교환 배송비 수취 총액 (전 채널)
+    const totalFee = allRows.reduce((sum, r) => sum + shippingFee(r), 0);
+
+    // 반복교환 고객 (기간 내 3회 이상, 전 채널 연락처 기준)
+    const phoneCount: Record<string, number> = {};
+    allRows.forEach(r => {
+      const p = (r['연락처'] || '').trim();
+      if (p) phoneCount[p] = (phoneCount[p] || 0) + 1;
+    });
+    const repeatCustomers = Object.values(phoneCount).filter(c => c >= 3).length;
+
     const ops = {
       leadMedian: median(leadTimes),
       prevLeadMedian: median(prevLeadTimes),
       shipRate: allRows.length > 0 ? Math.round((shippedCount / allRows.length) * 100) : 0,
+      recoveryOverdue,
+      totalFee,
+      repeatCustomers,
     };
 
-    return { filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr, topProducts: topProdArr, agingData: agingMap, opsData: ops };
+    // 품질 급증 경보 — 제품결함(변심·전산오류 제외) 상품별 현재기간 vs 직전기간 비교
+    // 트리거: 현재 5건 이상 AND 직전기간의 2배 이상
+    const defectCount = (rows: any[]) => {
+      const m: Record<string, number> = {};
+      rows.forEach(r => {
+        if (classifyDefect(r['불량 사유'])?.group !== 'product') return;
+        const name = r['상품명']?.trim();
+        if (name) m[name] = (m[name] || 0) + 1;
+      });
+      return m;
+    };
+    const curDefect = defectCount(bulryang);
+    const prevDefect = defectCount(prevBulryang);
+    const alerts = Object.entries(curDefect)
+      .map(([name, count]) => ({ name, count, prevCount: prevDefect[name] || 0 }))
+      .filter(a => a.count >= 5 && a.count >= 2 * Math.max(a.prevCount, 1))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 2);
+
+    // 부서별 원라이너 — 생산/QC(제품결함 1위 상품), 재무(무료교환 비중)
+    const topDefectEntry = Object.entries(curDefect).sort((a, b) => b[1] - a[1])[0];
+    const freeCount = jasa.filter(r => r['첫주문여부[자동]'] === '무료교환').length;
+    const dept = {
+      topDefectProduct: topDefectEntry ? { name: topDefectEntry[0], count: topDefectEntry[1] } : null,
+      freeRate: jasa.length > 0 ? Math.round((freeCount / jasa.length) * 100) : 0,
+    };
+
+    return { filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr, topProducts: topProdArr, agingData: agingMap, opsData: ops, qualityAlerts: alerts, deptSummary: dept };
   }, [data, startDate, endDate]);
 
   if (loading && !data) return (
@@ -201,6 +255,9 @@ export const OverviewDashboard: React.FC = () => {
   const OPS_DATA = [
     { label: '출고 리드타임 (중앙값)', value: opsData.leadMedian !== null ? `${opsData.leadMedian}일` : '-', detail: opsData.prevLeadMedian !== null ? `전기 ${opsData.prevLeadMedian}일` : '', good: opsData.leadMedian !== null && opsData.prevLeadMedian !== null && opsData.leadMedian <= opsData.prevLeadMedian },
     { label: '출고 처리율', value: `${opsData.shipRate}%`, detail: '출고일이 확정 날짜인 건 기준', good: opsData.shipRate >= 90 },
+    { label: '회수 지연 (7일+)', value: `${opsData.recoveryOverdue}건`, detail: '자사몰·불량 기준, 미집화 상태', good: opsData.recoveryOverdue === 0 },
+    { label: '교환 배송비 수취', value: `${opsData.totalFee.toLocaleString()}원`, detail: '조회 기간 전 채널 합계', good: true },
+    { label: '반복교환 고객 (3회+)', value: `${opsData.repeatCustomers}명`, detail: '조회 기간 내 전 채널 기준', good: true },
   ];
 
   return (
@@ -224,6 +281,25 @@ export const OverviewDashboard: React.FC = () => {
         </div>
       </section>
 
+      {/* 품질 급증 경보 — 조건 충족 시에만 노출 */}
+      {qualityAlerts.length > 0 && (
+        <section className="bg-rose-50 border-2 border-rose-200 rounded-3xl p-6 flex items-start gap-4">
+          <div className="bg-rose-500 p-3 rounded-2xl shrink-0">
+            <Icon name="warning" className="text-white text-2xl" />
+          </div>
+          <div>
+            <p className="text-[10px] font-black text-rose-500 uppercase tracking-widest mb-1">품질 급증 경보</p>
+            <div className="flex flex-wrap gap-x-6 gap-y-1">
+              {qualityAlerts.map((a, i) => (
+                <p key={i} className="text-sm font-bold text-rose-700">
+                  <span className="font-black">{a.name}</span> 불량 급증 — 이번 기간 {a.count}건 (전기 {a.prevCount}건)
+                </p>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* KPI Section */}
       <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
         {KPI_DATA.map((kpi, idx) => (
@@ -245,15 +321,13 @@ export const OverviewDashboard: React.FC = () => {
         ))}
       </section>
 
-      {/* Ops Metrics Strip — 채널 전체를 아우르는 운영지표만 남김 */}
-      <section className="grid grid-cols-2 gap-6 max-w-[600px]">
+      {/* 리스크 & 비용 지표 — 물류/재무/CX가 가져갈 핵심 운영지표 */}
+      <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
         {OPS_DATA.map((m, idx) => (
-          <div key={idx} className="bg-white px-6 py-5 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{m.label}</p>
-              <p className={`text-2xl font-black ${m.good ? 'text-slate-900' : 'text-rose-600'}`}>{m.value}</p>
-            </div>
-            <p className="text-[10px] font-bold text-slate-400 text-right max-w-[120px]">{m.detail}</p>
+          <div key={idx} className="bg-white px-6 py-5 rounded-2xl shadow-sm border border-slate-100">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{m.label}</p>
+            <p className={`text-2xl font-black ${m.good ? 'text-slate-900' : 'text-rose-600'}`}>{m.value}</p>
+            <p className="text-[10px] font-bold text-slate-400 mt-1">{m.detail}</p>
           </div>
         ))}
       </section>
@@ -412,14 +486,32 @@ export const OverviewDashboard: React.FC = () => {
             </div>
          </div>
 
-         {/* AI Summary Section (Repurposed for Status) */}
+         {/* 부서별 현황 — 각 부서가 이 카드만 봐도 자기 몫을 가져가도록 */}
          <div className="bg-indigo-600 p-8 rounded-[32px] shadow-xl text-white flex flex-col justify-between">
             <div>
-               <h4 className="text-base font-black mb-6">최근 리포트 요약</h4>
-               <p className="text-xs font-bold leading-relaxed opacity-80">
-                  현재 조회 기간 기준 총 {stats.total}건의 교환이 확인되었습니다. 
-                  자사몰 비중이 {KPI_DATA[1].detail}로 집계되며, 7일 이상 지연된 건수가 {agingData.d7}건으로 우선 처리가 권장됩니다.
-               </p>
+               <h4 className="text-base font-black mb-6">부서별 현황</h4>
+               <div className="space-y-4">
+                  <Link to="/defective-analysis" className="block bg-white/10 hover:bg-white/20 p-4 rounded-2xl transition-colors">
+                     <p className="text-[10px] font-black opacity-60 uppercase mb-1.5">생산 / QC</p>
+                     {deptSummary.topDefectProduct ? (
+                        <p className="text-xs font-bold leading-relaxed">
+                           제품결함 1위 — <span className="font-black">{deptSummary.topDefectProduct.name}</span> {deptSummary.topDefectProduct.count}건
+                        </p>
+                     ) : <p className="text-xs font-bold opacity-60">제품결함 데이터 없음</p>}
+                  </Link>
+                  <Link to="/oebu-exchange" className="block bg-white/10 hover:bg-white/20 p-4 rounded-2xl transition-colors">
+                     <p className="text-[10px] font-black opacity-60 uppercase mb-1.5">물류</p>
+                     <p className="text-xs font-bold leading-relaxed">
+                        회수 지연 <span className="font-black">{opsData.recoveryOverdue}건</span> · 출고 리드타임 중앙값 <span className="font-black">{opsData.leadMedian !== null ? `${opsData.leadMedian}일` : '-'}</span>
+                     </p>
+                  </Link>
+                  <Link to="/jasa-exchange" className="block bg-white/10 hover:bg-white/20 p-4 rounded-2xl transition-colors">
+                     <p className="text-[10px] font-black opacity-60 uppercase mb-1.5">재무</p>
+                     <p className="text-xs font-bold leading-relaxed">
+                        교환 배송비 수취 <span className="font-black">{opsData.totalFee.toLocaleString()}원</span> · 무료교환 비중 <span className="font-black">{deptSummary.freeRate}%</span>
+                     </p>
+                  </Link>
+               </div>
             </div>
             <div className="bg-white/10 p-4 rounded-2xl mt-8">
                <p className="text-[10px] font-black opacity-60 uppercase mb-2">Next Suggested Action</p>

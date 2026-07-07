@@ -26,6 +26,17 @@ export const shipStatus = (row: Record<string, any>): ShipStatus => {
 
 export const isShipped = (row: Record<string, any>) => shipStatus(row) === 'shipped';
 
+// 회수내역이 '미집화'(반송장 미생성 포함) 상태면 아직 택배사가 원물을 수거하지 않은 것 —
+// 접수일 기준 며칠 지났는지와 함께 봐야 "지연"인지 "정상 대기중"인지 판단 가능
+export const needsRecovery = (row: Record<string, any>): boolean =>
+  (row['회수내역'] || '').trim().startsWith('미집화');
+
+// 택배비 열에서 숫자만 추출 ('6,000', '6000', '' 등 혼재)
+export const shippingFee = (row: Record<string, any>): number => {
+  const n = parseInt((row['택배비'] || '').replace(/[^0-9]/g, ''), 10);
+  return isNaN(n) ? 0 : n;
+};
+
 // 접수일→출고일 리드타임 (둘 다 날짜일 때만, 일 단위)
 export const leadTimeDays = (row: Record<string, any>): number | null => {
   const a = toISODate(row['접수일']);

@@ -4,7 +4,7 @@ import { DateFilter } from '../components/ui/DateFilter';
 import { fetchDashboardData, type ExchangeData } from '../api/sheets';
 import { shipStatus, isShipped, leadTimeDays, median, toISODate } from '../lib/exchange';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell
 } from 'recharts';
 
@@ -59,7 +59,7 @@ export const OverviewDashboard: React.FC = () => {
       stats: { jasa: 0, bulryang: 0, oebu: 0, total: 0, mom: 0 },
       chartData: [], pieData: [], topProducts: [],
       agingData: { d3: 0, d5: 0, d7: 0, waitingStock: 0, notReceived: 0, pending: 0 },
-      opsData: { leadMedian: null as number | null, prevLeadMedian: null as number | null, shipRate: 0, preExchangeRate: 0, freeRate: 0 }
+      opsData: { leadMedian: null as number | null, prevLeadMedian: null as number | null, shipRate: 0 }
     };
 
     const sDate = new Date(startDate);
@@ -104,13 +104,14 @@ export const OverviewDashboard: React.FC = () => {
       mom
     };
 
-    // Prepare Chart Data (Daily Trend)
-    const dailyMap: Record<string, { date: string, jasa: number, oebu: number, bulryang: number }> = {};
+    // Prepare Chart Data (Daily Trend) — 데이터 없는 날짜도 0으로 채워서
+    // 실제 접수가 없는 날(주말 등)이 그래프에서 빠지고 이어져 보이지 않게 함
+    const dailyMap: Record<string, { jasa: number, oebu: number, bulryang: number }> = {};
     const processRows = (rows: any[], key: 'jasa' | 'oebu' | 'bulryang') => {
       rows.forEach(r => {
         const d = r['접수일']?.replace(/\./g, '-');
         if (d) {
-          if (!dailyMap[d]) dailyMap[d] = { date: d.substring(5), jasa: 0, oebu: 0, bulryang: 0 };
+          if (!dailyMap[d]) dailyMap[d] = { jasa: 0, oebu: 0, bulryang: 0 };
           dailyMap[d][key]++;
         }
       });
@@ -118,7 +119,12 @@ export const OverviewDashboard: React.FC = () => {
     processRows(jasa, 'jasa');
     processRows(oebu, 'oebu');
     processRows(bulryang, 'bulryang');
-    const chartArr = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+    const chartArr: { date: string, jasa: number, oebu: number, bulryang: number }[] = [];
+    for (let d = new Date(sDate); d <= eDate; d.setDate(d.getDate() + 1)) {
+      const key = d.toISOString().split('T')[0];
+      const entry = dailyMap[key] || { jasa: 0, oebu: 0, bulryang: 0 };
+      chartArr.push({ date: key.substring(5), ...entry });
+    }
 
     // Pie Data
     const pieArr = [
@@ -164,18 +170,14 @@ export const OverviewDashboard: React.FC = () => {
       }
     });
 
-    // 운영 지표 (리드타임·처리율·선교환·무료교환)
+    // 운영 지표 (리드타임·처리율) — 채널 전체를 아우르는 지표만 남김
     const leadTimes = allRows.map(leadTimeDays).filter((v): v is number => v !== null);
     const prevLeadTimes = [...prevJasa, ...prevOebu, ...prevBulryang].map(leadTimeDays).filter((v): v is number => v !== null);
     const shippedCount = allRows.filter(isShipped).length;
-    const preExchange = jasa.filter(r => (r['교환형태'] || '').includes('선교환')).length;
-    const freeCount = jasa.filter(r => r['첫주문여부[자동]'] === '무료교환').length;
     const ops = {
       leadMedian: median(leadTimes),
       prevLeadMedian: median(prevLeadTimes),
       shipRate: allRows.length > 0 ? Math.round((shippedCount / allRows.length) * 100) : 0,
-      preExchangeRate: jasa.length > 0 ? Math.round((preExchange / jasa.length) * 100) : 0,
-      freeRate: jasa.length > 0 ? Math.round((freeCount / jasa.length) * 100) : 0,
     };
 
     return { filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr, topProducts: topProdArr, agingData: agingMap, opsData: ops };
@@ -199,8 +201,6 @@ export const OverviewDashboard: React.FC = () => {
   const OPS_DATA = [
     { label: '출고 리드타임 (중앙값)', value: opsData.leadMedian !== null ? `${opsData.leadMedian}일` : '-', detail: opsData.prevLeadMedian !== null ? `전기 ${opsData.prevLeadMedian}일` : '', good: opsData.leadMedian !== null && opsData.prevLeadMedian !== null && opsData.leadMedian <= opsData.prevLeadMedian },
     { label: '출고 처리율', value: `${opsData.shipRate}%`, detail: '출고일이 확정 날짜인 건 기준', good: opsData.shipRate >= 90 },
-    { label: '선교환 비중 (자사몰)', value: `${opsData.preExchangeRate}%`, detail: '회수 전 먼저 출고한 건', good: true },
-    { label: '무료교환 비중 (자사몰)', value: `${opsData.freeRate}%`, detail: `입금요청 ${100 - opsData.freeRate}% — 배송비 정책 참고`, good: true },
   ];
 
   return (
@@ -245,8 +245,8 @@ export const OverviewDashboard: React.FC = () => {
         ))}
       </section>
 
-      {/* Ops Metrics Strip — 물류/재무/운영 공유용 핵심 운영지표 */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Ops Metrics Strip — 채널 전체를 아우르는 운영지표만 남김 */}
+      <section className="grid grid-cols-2 gap-6 max-w-[600px]">
         {OPS_DATA.map((m, idx) => (
           <div key={idx} className="bg-white px-6 py-5 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between">
             <div>
@@ -281,18 +281,32 @@ export const OverviewDashboard: React.FC = () => {
             </div>
             <div className="h-[340px]">
                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
+                  <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+                     <defs>
+                        <linearGradient id="fillJasa" x1="0" y1="0" x2="0" y2="1">
+                           <stop offset="5%" stopColor="#6366f1" stopOpacity={0.25} />
+                           <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="fillOebu" x1="0" y1="0" x2="0" y2="1">
+                           <stop offset="5%" stopColor="#f97316" stopOpacity={0.2} />
+                           <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                        </linearGradient>
+                     </defs>
                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                     <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800, fill: '#94a3b8' }} dy={15} />
-                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800, fill: '#94a3b8' }} dx={-15} />
-                     <Tooltip 
-                        cursor={{ stroke: '#f1f5f9', strokeWidth: 2 }}
+                     <XAxis
+                        dataKey="date" axisLine={false} tickLine={false}
+                        tick={{ fontSize: 10, fontWeight: 800, fill: '#94a3b8' }} dy={10}
+                        interval={Math.max(0, Math.ceil(chartData.length / 10) - 1)}
+                     />
+                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800, fill: '#94a3b8' }} width={32} allowDecimals={false} />
+                     <Tooltip
+                        cursor={{ stroke: '#e2e8f0', strokeWidth: 1 }}
                         contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
                      />
-                     <Line type="stepAfter" dataKey="jasa" stroke="#6366f1" strokeWidth={4} dot={{ r: 4, fill: '#6366f1', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
-                     <Line type="stepAfter" dataKey="oebu" stroke="#f97316" strokeWidth={4} dot={{ r: 4, fill: '#f97316', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
-                     <Line type="stepAfter" dataKey="bulryang" stroke="#ef4444" strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={{ r: 5 }} />
-                  </LineChart>
+                     <Area type="monotone" dataKey="jasa" name="자사몰" stroke="#6366f1" strokeWidth={3} fill="url(#fillJasa)" dot={false} activeDot={{ r: 5 }} />
+                     <Area type="monotone" dataKey="oebu" name="외부몰" stroke="#f97316" strokeWidth={3} fill="url(#fillOebu)" dot={false} activeDot={{ r: 5 }} />
+                     <Area type="monotone" dataKey="bulryang" name="불량" stroke="#ef4444" strokeWidth={2} fill="none" dot={false} activeDot={{ r: 4 }} />
+                  </AreaChart>
                </ResponsiveContainer>
             </div>
          </div>

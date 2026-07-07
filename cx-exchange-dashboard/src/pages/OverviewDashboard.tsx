@@ -2,8 +2,9 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Icon } from '../components/ui/Icon';
 import { DateFilter } from '../components/ui/DateFilter';
 import { fetchDashboardData, type ExchangeData } from '../api/sheets';
-import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+import { shipStatus, isShipped, leadTimeDays, median, toISODate } from '../lib/exchange';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell
 } from 'recharts';
 
@@ -14,10 +15,10 @@ export const OverviewDashboard: React.FC = () => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
-  const loadData = async () => {
+  const loadData = async (force = false) => {
     setLoading(true);
     try {
-      const result = await fetchDashboardData();
+      const result = await fetchDashboardData(force);
       setData(result);
       
       if (!startDate || !endDate) {
@@ -52,11 +53,13 @@ export const OverviewDashboard: React.FC = () => {
     loadData();
   }, []);
 
-  const { filteredData, stats, chartData, pieData, topProducts, agingData } = useMemo(() => {
-    if (!data || !startDate || !endDate) return { 
-      filteredData: { jasa: [], bulryang: [], oebu: [] }, 
+  const { stats, chartData, pieData, topProducts, agingData, opsData } = useMemo(() => {
+    if (!data || !startDate || !endDate) return {
+      filteredData: { jasa: [], bulryang: [], oebu: [] },
       stats: { jasa: 0, bulryang: 0, oebu: 0, total: 0, mom: 0 },
-      chartData: [], pieData: [], topProducts: [], agingData: { d3: 0, d5: 0, d7: 0 }
+      chartData: [], pieData: [], topProducts: [],
+      agingData: { d3: 0, d5: 0, d7: 0, waitingStock: 0, notReceived: 0, pending: 0 },
+      opsData: { leadMedian: null as number | null, prevLeadMedian: null as number | null, shipRate: 0, preExchangeRate: 0, freeRate: 0 }
     };
 
     const sDate = new Date(startDate);
@@ -124,31 +127,58 @@ export const OverviewDashboard: React.FC = () => {
       { name: '불량', value: statsObj.bulryang, color: '#ef4444' },
     ].filter(v => v.value > 0);
 
-    // Top Products
-    const prodMap: Record<string, number> = {};
+    // Top Products (불량 건수 함께 집계 → 품질 신호 표시)
+    const prodMap: Record<string, { count: number; defect: number }> = {};
     [...jasa, ...oebu, ...bulryang].forEach(r => {
       const name = r['상품명']?.trim();
-      if (name) prodMap[name] = (prodMap[name] || 0) + 1;
+      if (!name) return;
+      if (!prodMap[name]) prodMap[name] = { count: 0, defect: 0 };
+      prodMap[name].count++;
+    });
+    bulryang.forEach(r => {
+      const name = r['상품명']?.trim();
+      if (name && prodMap[name]) prodMap[name].defect++;
     });
     const topProdArr = Object.entries(prodMap)
-      .map(([name, count]) => ({ name, count }))
+      .map(([name, v]) => ({ name, ...v, share: currentTotal > 0 ? Math.round((v.count / currentTotal) * 100) : 0 }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 3);
 
-    // Aging Analysis (Unprocessed)
+    // Aging Analysis — 출고일이 "실제 날짜"인 건만 처리완료로 간주
+    // ('입고0707' 같은 재고대기, '미입고' 등이 처리완료로 잘못 잡히던 문제 수정)
     const today = new Date();
-    const agingMap = { d3: 0, d5: 0, d7: 0 };
-    [...jasa, ...oebu, ...bulryang].forEach(r => {
-      if (!r['출고일'] && r['접수일']) {
-        const regDate = new Date(r['접수일'].replace(/\./g, '-'));
-        const days = Math.floor((today.getTime() - regDate.getTime()) / (1000 * 60 * 60 * 24));
+    const agingMap = { d3: 0, d5: 0, d7: 0, waitingStock: 0, notReceived: 0, pending: 0 };
+    const allRows = [...jasa, ...oebu, ...bulryang];
+    allRows.forEach(r => {
+      const status = shipStatus(r);
+      if (status === 'shipped') return;
+      if (status === 'waitingStock') agingMap.waitingStock++;
+      else if (status === 'notReceived') agingMap.notReceived++;
+      else agingMap.pending++;
+      const reg = toISODate(r['접수일']);
+      if (reg) {
+        const days = Math.floor((today.getTime() - new Date(reg).getTime()) / 86400000);
         if (days >= 7) agingMap.d7++;
         else if (days >= 5) agingMap.d5++;
         else if (days >= 3) agingMap.d3++;
       }
     });
 
-    return { filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr, topProducts: topProdArr, agingData: agingMap };
+    // 운영 지표 (리드타임·처리율·선교환·무료교환)
+    const leadTimes = allRows.map(leadTimeDays).filter((v): v is number => v !== null);
+    const prevLeadTimes = [...prevJasa, ...prevOebu, ...prevBulryang].map(leadTimeDays).filter((v): v is number => v !== null);
+    const shippedCount = allRows.filter(isShipped).length;
+    const preExchange = jasa.filter(r => (r['교환형태'] || '').includes('선교환')).length;
+    const freeCount = jasa.filter(r => r['첫주문여부[자동]'] === '무료교환').length;
+    const ops = {
+      leadMedian: median(leadTimes),
+      prevLeadMedian: median(prevLeadTimes),
+      shipRate: allRows.length > 0 ? Math.round((shippedCount / allRows.length) * 100) : 0,
+      preExchangeRate: jasa.length > 0 ? Math.round((preExchange / jasa.length) * 100) : 0,
+      freeRate: jasa.length > 0 ? Math.round((freeCount / jasa.length) * 100) : 0,
+    };
+
+    return { filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr, topProducts: topProdArr, agingData: agingMap, opsData: ops };
   }, [data, startDate, endDate]);
 
   if (loading && !data) return (
@@ -157,12 +187,20 @@ export const OverviewDashboard: React.FC = () => {
     </div>
   );
 
+  const unshippedTotal = agingData.pending + agingData.waitingStock + agingData.notReceived;
   const KPI_DATA = [
     { label: '전체 교환 접수', value: stats.total.toLocaleString(), detail: `전기 대비 ${stats.mom >= 0 ? '+' : ''}${stats.mom}%`, color: 'indigo', trend: stats.mom >= 0 ? 'up' : 'down' },
     { label: '자사몰 일반교환', value: stats.jasa.toLocaleString(), detail: `${Math.round((stats.jasa/stats.total)*100 || 0)}% 비중`, color: 'emerald' },
     { label: '외부몰 교환 전체', value: stats.oebu.toLocaleString(), detail: `${Math.round((stats.oebu/stats.total)*100 || 0)}% 비중`, color: 'orange' },
     { label: '불량교환 전체', value: stats.bulryang.toLocaleString(), detail: `${Math.round((stats.bulryang/stats.total)*100 || 0)}% 발생률`, color: 'rose', isAlert: true },
-    { label: '미처리 합계', value: (agingData.d3 + agingData.d5 + agingData.d7).toString(), detail: 'Aging 건수 포함', color: 'slate' },
+    { label: '미출고 합계', value: unshippedTotal.toLocaleString(), detail: `재고대기 ${agingData.waitingStock} · 미입고 ${agingData.notReceived}`, color: 'slate' },
+  ];
+
+  const OPS_DATA = [
+    { label: '출고 리드타임 (중앙값)', value: opsData.leadMedian !== null ? `${opsData.leadMedian}일` : '-', detail: opsData.prevLeadMedian !== null ? `전기 ${opsData.prevLeadMedian}일` : '', good: opsData.leadMedian !== null && opsData.prevLeadMedian !== null && opsData.leadMedian <= opsData.prevLeadMedian },
+    { label: '출고 처리율', value: `${opsData.shipRate}%`, detail: '출고일이 확정 날짜인 건 기준', good: opsData.shipRate >= 90 },
+    { label: '선교환 비중 (자사몰)', value: `${opsData.preExchangeRate}%`, detail: '회수 전 먼저 출고한 건', good: true },
+    { label: '무료교환 비중 (자사몰)', value: `${opsData.freeRate}%`, detail: `입금요청 ${100 - opsData.freeRate}% — 배송비 정책 참고`, good: true },
   ];
 
   return (
@@ -180,7 +218,7 @@ export const OverviewDashboard: React.FC = () => {
             onStartDateChange={setStartDate} 
             onEndDateChange={setEndDate} 
           />
-          <button onClick={loadData} className="p-2 hover:bg-slate-50 transition-colors border-l border-slate-100 ml-2">
+          <button onClick={() => loadData(true)} className="p-2 hover:bg-slate-50 transition-colors border-l border-slate-100 ml-2">
             <Icon name="sync" className={loading ? 'animate-spin text-indigo-600' : 'text-slate-400'} />
           </button>
         </div>
@@ -207,6 +245,19 @@ export const OverviewDashboard: React.FC = () => {
         ))}
       </section>
 
+      {/* Ops Metrics Strip — 물류/재무/운영 공유용 핵심 운영지표 */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+        {OPS_DATA.map((m, idx) => (
+          <div key={idx} className="bg-white px-6 py-5 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{m.label}</p>
+              <p className={`text-2xl font-black ${m.good ? 'text-slate-900' : 'text-rose-600'}`}>{m.value}</p>
+            </div>
+            <p className="text-[10px] font-bold text-slate-400 text-right max-w-[120px]">{m.detail}</p>
+          </div>
+        ))}
+      </section>
+
       {/* Main Analysis Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
          {/* Daily Trend (8/12) */}
@@ -223,6 +274,9 @@ export const OverviewDashboard: React.FC = () => {
                   <div className="flex items-center gap-2 text-orange-500">
                      <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span> 외부몰
                   </div>
+                  <div className="flex items-center gap-2 text-rose-500">
+                     <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span> 불량
+                  </div>
                </div>
             </div>
             <div className="h-[340px]">
@@ -237,6 +291,7 @@ export const OverviewDashboard: React.FC = () => {
                      />
                      <Line type="stepAfter" dataKey="jasa" stroke="#6366f1" strokeWidth={4} dot={{ r: 4, fill: '#6366f1', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
                      <Line type="stepAfter" dataKey="oebu" stroke="#f97316" strokeWidth={4} dot={{ r: 4, fill: '#f97316', strokeWidth: 2, stroke: '#fff' }} activeDot={{ r: 6 }} />
+                     <Line type="stepAfter" dataKey="bulryang" stroke="#ef4444" strokeWidth={2} strokeDasharray="6 4" dot={false} activeDot={{ r: 5 }} />
                   </LineChart>
                </ResponsiveContainer>
             </div>
@@ -293,12 +348,13 @@ export const OverviewDashboard: React.FC = () => {
                        <span className="text-lg font-black text-slate-200 group-hover:text-indigo-600 transition-colors">0{i+1}</span>
                        <div>
                           <p className="text-xs font-black text-slate-800 line-clamp-1 max-w-[180px]">{p.name}</p>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tight mt-0.5">Fashion Apparel Item</p>
+                          <p className="text-[10px] text-slate-400 font-bold tracking-tight mt-0.5">
+                            전체 교환의 {p.share}%{p.defect > 0 && <span className="text-rose-500"> · 불량 {p.defect}건</span>}
+                          </p>
                        </div>
                     </div>
                     <div className="text-right">
                        <p className="text-sm font-black text-slate-900">{p.count}건</p>
-                       <p className="text-[9px] text-emerald-500 font-black">+4%</p>
                     </div>
                  </div>
                ))}
@@ -326,12 +382,16 @@ export const OverviewDashboard: React.FC = () => {
                ))}
             </div>
             <div className="mt-8 pt-6 border-t border-white/10 relative z-10">
-               <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest mb-4">최근 미처리 상세 건</p>
+               <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest mb-4">미출고 상태 구성</p>
                <div className="space-y-3">
-                 {[...filteredData.jasa, ...filteredData.oebu].filter(r => !r['출고일']).slice(0, 2).map((r, i) => (
+                 {[
+                   { label: '단순 미출고', count: agingData.pending },
+                   { label: '재고 입고 대기', count: agingData.waitingStock },
+                   { label: '반품 미입고', count: agingData.notReceived },
+                 ].map((s, i) => (
                    <div key={i} className="text-[11px] font-medium flex justify-between gap-2">
-                      <span className="opacity-70 truncate">{r['주문번호']}</span>
-                      <span className="text-indigo-400 shrink-0">{r['수령자']} / 대기중</span>
+                      <span className="opacity-70">{s.label}</span>
+                      <span className="text-indigo-400 shrink-0 font-black">{s.count}건</span>
                    </div>
                  ))}
                </div>

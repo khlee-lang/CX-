@@ -8,6 +8,12 @@
   "functions": {
     "api/reconcile.js": {
       "maxDuration": 300
+    },
+    "api/recompute-category.js": {
+      "maxDuration": 120
+    },
+    "api/archive-completed.js": {
+      "maxDuration": 120
     }
   }
 }

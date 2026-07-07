@@ -51,6 +51,10 @@ export const Sidebar: React.FC = () => {
             <Icon name="sync_alt" />
             <span className="text-sm tracking-tight">반품-교환 연동</span>
           </NavLink>
+          <NavLink to="/returns-sheet-maintenance" className={navLinkClasses}>
+            <Icon name="build" />
+            <span className="text-sm tracking-tight">반품 시트 관리</span>
+          </NavLink>
         </div>
       </nav>
       

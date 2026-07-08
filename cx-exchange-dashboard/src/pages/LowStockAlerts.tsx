@@ -26,10 +26,11 @@ export const LowStockAlerts: React.FC = () => {
     if (!data?.data?.inventory) return { stockList: [], topRisk: [], totalItems: 0, highRiskCount: 0 };
     
     // Parse inventory items
+    // 재고수량은 '재고' 키(J열, 헤더 없이 raw로 읽어옴 — dashboard-data.js 참고)
     const parsed = data.data.inventory
-      .filter((row: any) => row.ITEM && row.INVENTORY && row.INVENTORY !== '판토스\\n가용재고')
+      .filter((row: any) => row.ITEM && row['재고'] !== undefined && row['재고'] !== '')
       .map((row: any) => {
-        const stockStr = String(row.INVENTORY || '0').replace(/,/g, '');
+        const stockStr = String(row['재고'] || '0').replace(/,/g, '');
         const stockNum = parseInt(stockStr, 10);
         return {
           row,

@@ -2,9 +2,9 @@ import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 import { createRequire } from 'module';
 
-const SPREADSHEET_ID = '1cqLifjcihpHlAUN9ZcG19uJ9MhdkYcOxLzMDPcaBufg';
+export const SPREADSHEET_ID = '1cqLifjcihpHlAUN9ZcG19uJ9MhdkYcOxLzMDPcaBufg';
 
-export function createDoc() {
+export function getJwt() {
   let creds;
   if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
@@ -13,7 +13,7 @@ export function createDoc() {
     creds = require('../server/service-account.json');
   }
 
-  const jwt = new JWT({
+  return new JWT({
     email: creds.client_email,
     key: creds.private_key,
     scopes: [
@@ -21,6 +21,8 @@ export function createDoc() {
       'https://www.googleapis.com/auth/drive.file',
     ],
   });
+}
 
-  return new GoogleSpreadsheet(SPREADSHEET_ID, jwt);
+export function createDoc() {
+  return new GoogleSpreadsheet(SPREADSHEET_ID, getJwt());
 }

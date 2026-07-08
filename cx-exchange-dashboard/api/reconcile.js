@@ -138,16 +138,28 @@ const EC_NEW_OPT    = 8;
 const EC_QTY        = 9;
 const WRITE_E_SHIP_COL = 2; // B열
 
-const VALID_PAY = new Set(['', '무상', '입금확인', '무료교환', '차감']);
+// 카테고리별 설정: 대상 교환접수시트 이름 + 유효한 지불방법 값
+// 외부몰은 '결제'(이미 결제완료, 자사몰의 '입금확인'과 동일 취급)와
+// '동봉확인'/'동봉요청'(배송비 결제완료로 취급)이 자사몰에 없는 값이라 추가함
+const CATEGORY_CONFIGS = {
+  자사몰교환: {
+    exchangeSheet: '[자사몰] 교환',
+    validPay: new Set(['', '무상', '입금확인', '무료교환', '차감']),
+  },
+  외부몰교환: {
+    exchangeSheet: '[외부몰] 교환',
+    validPay: new Set(['', '무상', '입금확인', '무료교환', '차감', '결제', '동봉확인', '동봉요청']),
+  },
+};
 
 // ── 파싱 ─────────────────────────────────────────────────────────
 // rowOffset: 시트에서 실제 읽기 시작한 행번호 (1-based)
-function parseReturns(rows, rowOffset) {
+function parseReturns(rows, rowOffset, category) {
   const groups = {};
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (safeGet(row, RC_DONE_DATE)) continue;
-    if (safeGet(row, RC_CATEGORY) !== '자사몰교환') continue;
+    if (safeGet(row, RC_CATEGORY) !== category) continue;
     const orderNo = safeGet(row, RC_ORDER_NO);
     if (!orderNo) continue;
     const item = safeGet(row, RC_ITEM);
@@ -192,7 +204,7 @@ function counterEqual(retRows, excRows) {
 }
 
 // ── 매칭 & 출고일 결정 ───────────────────────────────────────────
-function reconcile(returnsGroups, exchangeGroups, today) {
+function reconcile(returnsGroups, exchangeGroups, today, validPay) {
   const actions = [];
   const issues  = [];
 
@@ -237,7 +249,7 @@ function reconcile(returnsGroups, exchangeGroups, today) {
     if (pay === '입금요청') {
       shipDate = arrivalTag(today);
       reason = '지불방법=입금요청 → 입고MMDD';
-    } else if (VALID_PAY.has(pay)) {
+    } else if (validPay.has(pay)) {
       if (excRows.every(r => r.newOpt)) {
         shipDate = nextShippingDate(today);
         reason = `지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`;
@@ -265,9 +277,9 @@ function reconcile(returnsGroups, exchangeGroups, today) {
 }
 
 // ── 시트 반영 ────────────────────────────────────────────────────
-async function applyActions(jwt, actions) {
+async function applyActions(jwt, actions, exchangeSheet) {
   const excUpdates = actions.filter(act => !act.skipShipWrite).flatMap(act =>
-    act.exchange_rows.map(row => ({ range: `'[자사몰] 교환'!${rowColToA1(row, WRITE_E_SHIP_COL)}`, values: [[act.ship_date]] }))
+    act.exchange_rows.map(row => ({ range: `'${exchangeSheet}'!${rowColToA1(row, WRITE_E_SHIP_COL)}`, values: [[act.ship_date]] }))
   );
   const retUpdates = actions.flatMap(act =>
     act.return_rows.map(row => ({ range: `'판토스_입고리스트'!${rowColToA1(row, WRITE_R_DONE_COL)}`, values: [[act.done_date]] }))
@@ -283,7 +295,10 @@ async function applyActions(jwt, actions) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { apply = false, today = new Date().toISOString().slice(0, 10) } = req.body || {};
+  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환' } = req.body || {};
+
+  const config = CATEGORY_CONFIGS[category];
+  if (!config) return res.status(400).json({ error: `알 수 없는 category: ${category}` });
 
   try {
     const jwt = getJwt();
@@ -296,20 +311,20 @@ export default async function handler(req, res) {
     const START_ROW = 3;
     const [retRows, excRows] = await Promise.all([
       sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!C${START_ROW}:O`),
-      sheetsGet(jwt, EXCHANGE_SS_ID, `'[자사몰] 교환'!B${START_ROW}:K`),
+      sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!B${START_ROW}:K`),
     ]);
 
-    const returnsGroups  = parseReturns(retRows, START_ROW);
+    const returnsGroups  = parseReturns(retRows, START_ROW, category);
     const exchangeGroups = parseExchanges(excRows, START_ROW);
 
-    const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today);
+    const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today, config.validPay);
 
     let applied = null;
     if (apply && actions.length > 0) {
-      applied = await applyActions(jwt, actions);
+      applied = await applyActions(jwt, actions, config.exchangeSheet);
     }
 
-    res.json({ actions, issues, applied, today });
+    res.json({ actions, issues, applied, today, category });
   } catch (err) {
     console.error('[reconcile]', err);
     res.status(500).json({ error: err.message });

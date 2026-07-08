@@ -3,6 +3,12 @@ import { Icon } from '../components/ui/Icon';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
+type Category = '자사몰교환' | '외부몰교환';
+const CATEGORY_TABS: { key: Category; label: string }[] = [
+  { key: '자사몰교환', label: '자사몰' },
+  { key: '외부몰교환', label: '외부몰' },
+];
+
 interface Action {
   order_no: string;
   exchange_rows: number[];
@@ -37,9 +43,18 @@ const ISSUE_TYPE_COLOR: Record<string, string> = {
 };
 
 export const Reconcile: React.FC = () => {
+  const [category, setCategory] = useState<Category>('자사몰교환');
   const [status, setStatus]   = useState<Status>('idle');
   const [result, setResult]   = useState<ReconcileResult | null>(null);
   const [error, setError]     = useState<string>('');
+
+  const switchCategory = (cat: Category) => {
+    if (cat === category) return;
+    setCategory(cat);
+    setStatus('idle');
+    setResult(null);
+    setError('');
+  };
 
   const run = async (apply: boolean) => {
     setStatus(apply ? 'applying' : 'loading');
@@ -48,7 +63,7 @@ export const Reconcile: React.FC = () => {
       const res = await fetch(`${API_BASE_URL}/reconcile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apply }),
+        body: JSON.stringify({ apply, category }),
       });
       const text = await res.text();
       let data: any;
@@ -69,7 +84,24 @@ export const Reconcile: React.FC = () => {
       {/* 헤더 */}
       <div>
         <h1 className="text-2xl font-black text-slate-800 dark:text-slate-100">반품입고 → 교환 연동</h1>
-        <p className="text-sm text-slate-500 mt-1">반품입고시트의 미처리 자사몰교환 건을 교환접수시트와 대조해 출고일·확인완료일을 자동 기입합니다.</p>
+        <p className="text-sm text-slate-500 mt-1">반품입고시트의 미처리 {category} 건을 교환접수시트와 대조해 출고일·확인완료일을 자동 기입합니다.</p>
+      </div>
+
+      {/* 카테고리 탭 */}
+      <div className="flex gap-2 border-b border-slate-200 dark:border-slate-700">
+        {CATEGORY_TABS.map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => switchCategory(tab.key)}
+            className={`px-4 py-2 text-sm font-bold border-b-2 -mb-px transition-colors ${
+              category === tab.key
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* 안내 카드 */}

@@ -110,10 +110,23 @@ app.patch('/api/update-cell', async (req, res) => {
 
 // ── POST: 반품입고-교환 연동 ─────────────────────────────────────
 app.post('/api/reconcile', async (req, res) => {
-  const { apply = false, today = new Date().toISOString().slice(0, 10) } = req.body || {};
+  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환' } = req.body || {};
 
   const RETURNS_SS_ID  = '1B6UKmborJQCAKIrIBziAFMjKR0CfY8Jul1E_Rbs5C3Y';
   const EXCHANGE_SS_ID = '1cqLifjcihpHlAUN9ZcG19uJ9MhdkYcOxLzMDPcaBufg';
+
+  const CATEGORY_CONFIGS = {
+    자사몰교환: {
+      exchangeSheet: '[자사몰] 교환',
+      validPay: new Set(['', '무상', '입금확인', '무료교환', '차감']),
+    },
+    외부몰교환: {
+      exchangeSheet: '[외부몰] 교환',
+      validPay: new Set(['', '무상', '입금확인', '무료교환', '차감', '결제', '동봉확인', '동봉요청']),
+    },
+  };
+  const config = CATEGORY_CONFIGS[category];
+  if (!config) return res.status(400).json({ error: `알 수 없는 category: ${category}` });
 
   const localJwt = new JWT({ email: creds.client_email, key: creds.private_key, scopes: SCOPES });
 
@@ -148,13 +161,11 @@ app.post('/api/reconcile', async (req, res) => {
   function arrivalTag(d) { const dt = new Date(d); return `입고${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}`; }
   function sg(row, i) { return (row?.[i] ?? '').toString().trim(); }
 
-  const VALID_PAY = new Set(['', '무상', '입금확인', '무료교환', '차감']);
-
   function parseReturns(rows) {
     const g = {};
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
-      if (sg(r,0)) continue; if (sg(r,2) !== '자사몰교환') continue;
+      if (sg(r,0)) continue; if (sg(r,2) !== category) continue;
       const o = sg(r,7); if (!o) continue;
       if (!g[o]) g[o] = [];
       g[o].push({ row: i+1, item: sg(r,10), qty: parseInt(sg(r,12)||sg(r,11))||0 });
@@ -178,7 +189,7 @@ app.post('/api/reconcile', async (req, res) => {
     if (kR.length!==kE.length) return false;
     return kR.every((k,i)=>k===kE[i]&&cR[k]===cE[k]);
   }
-  function reconcile(rg, eg, t) {
+  function reconcile(rg, eg, t, validPay) {
     const actions=[], issues=[];
     for (const [o, retRows] of Object.entries(rg)) {
       const excRows = eg[o];
@@ -188,7 +199,7 @@ app.post('/api/reconcile', async (req, res) => {
       if (pays.size>1) { issues.push({order_no:o,issue_type:'지불방법혼재',description:`지불방법이 여럿: ${[...pays].join(', ')}`,return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
       const pay=[...pays][0]; let shipDate, reason;
       if (pay==='입금요청') { shipDate=arrivalTag(t); reason='지불방법=입금요청 → 입고MMDD'; }
-      else if (VALID_PAY.has(pay)) { if (excRows.every(r=>r.newOpt)) { shipDate=nextShippingDate(t); reason=`지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`; } else { shipDate=arrivalTag(t); reason=`지불방법='${pay}', 출고옵션 일부 비어있음 → 입고MMDD`; } }
+      else if (validPay.has(pay)) { if (excRows.every(r=>r.newOpt)) { shipDate=nextShippingDate(t); reason=`지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`; } else { shipDate=arrivalTag(t); reason=`지불방법='${pay}', 출고옵션 일부 비어있음 → 입고MMDD`; } }
       else { issues.push({order_no:o,issue_type:'알수없는지불방법',description:`지불방법='${pay}'`,return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
       actions.push({order_no:o,exchange_rows:excRows.map(r=>r.row),return_rows:retRows.map(r=>r.row),ship_date:shipDate,done_date:t,reason});
     }
@@ -196,17 +207,17 @@ app.post('/api/reconcile', async (req, res) => {
   }
 
   try {
-    const [retRows, excRows] = await Promise.all([sheetsGet(RETURNS_SS_ID,"'판토스_입고리스트'!C:O"), sheetsGet(EXCHANGE_SS_ID,"'[자사몰] 교환'!B:K")]);
-    const {actions,issues} = reconcile(parseReturns(retRows), parseExchanges(excRows), today);
+    const [retRows, excRows] = await Promise.all([sheetsGet(RETURNS_SS_ID,"'판토스_입고리스트'!C:O"), sheetsGet(EXCHANGE_SS_ID,`'${config.exchangeSheet}'!B:K`)]);
+    const {actions,issues} = reconcile(parseReturns(retRows), parseExchanges(excRows), today, config.validPay);
     let applied = null;
     if (apply && actions.length > 0) {
-      const excU = actions.flatMap(a=>a.exchange_rows.map(r=>({range:`'[자사몰] 교환'!${rowColToA1(r,2)}`,values:[[a.ship_date]]})));
+      const excU = actions.flatMap(a=>a.exchange_rows.map(r=>({range:`'${config.exchangeSheet}'!${rowColToA1(r,2)}`,values:[[a.ship_date]]})));
       const retU = actions.flatMap(a=>a.return_rows.map(r=>({range:`'판토스_입고리스트'!${rowColToA1(r,3)}`,values:[[a.done_date]]})));
       if (excU.length) await sheetsBatchUpdate(EXCHANGE_SS_ID, excU);
       if (retU.length) await sheetsBatchUpdate(RETURNS_SS_ID, retU);
       applied = {excUpdated:excU.length, retUpdated:retU.length};
     }
-    res.json({actions,issues,applied,today});
+    res.json({actions,issues,applied,today,category});
   } catch (err) {
     console.error('[reconcile]', err);
     res.status(500).json({error: err.message});

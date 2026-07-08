@@ -1,315 +1,429 @@
-import React from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Icon } from '../components/ui/Icon';
+import { DateFilter } from '../components/ui/DateFilter';
+import { fetchDashboardData, type ExchangeData } from '../api/sheets';
+import { normalizeChannel, swapDirection, classifyDefect, leadTimeDays, median } from '../lib/exchange';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+
+const getWeekStr = (d: Date) => {
+  const dCopy = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  dCopy.setUTCDate(dCopy.getUTCDate() + 4 - (dCopy.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(dCopy.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((dCopy.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${String(dCopy.getUTCMonth() + 1).padStart(2, '0')}/${String(dCopy.getUTCDate()).padStart(2, '0')} (W${weekNo})`;
+};
 
 export const ProductDetail: React.FC = () => {
+  const [data, setData] = useState<ExchangeData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  const loadData = async (force = false) => {
+    setLoading(true);
+    try {
+      const result = await fetchDashboardData(force);
+      setData(result);
+      if (!startDate || !endDate) {
+        const allDates: string[] = [];
+        [...(result.data.jasaMall || []), ...(result.data.oebuMall || []), ...(result.data.bulryang || [])].forEach(r => {
+          if (r['접수일']) allDates.push(r['접수일'].replace(/\./g, '-'));
+        });
+        if (allDates.length > 0) {
+          allDates.sort();
+          const maxDateStr = allDates[allDates.length - 1];
+          const start = new Date(maxDateStr);
+          start.setMonth(start.getMonth() - 1);
+          setEndDate(maxDateStr);
+          setStartDate(start.toISOString().split('T')[0]);
+        }
+      }
+    } catch (err: any) { console.error(err.message); } finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  const productList = useMemo(() => {
+    if (!data) return [];
+    const set = new Set<string>();
+    [...(data.data.jasaMall || []), ...(data.data.oebuMall || []), ...(data.data.bulryang || [])].forEach(r => {
+      const name = r['상품명']?.trim();
+      if (name) set.add(name);
+    });
+    return Array.from(set).sort();
+  }, [data]);
+
+  const analysis = useMemo(() => {
+    if (!data || !selectedProduct || !startDate || !endDate) return null;
+
+    const inRange = (r: any) => {
+      const d = r['접수일']?.replace(/\./g, '-');
+      return d && d >= startDate && d <= endDate;
+    };
+
+    const allJasa = (data.data.jasaMall || []).filter(inRange);
+    const allOebu = (data.data.oebuMall || []).filter(inRange);
+    const allBul = (data.data.bulryang || []).filter(inRange);
+    const totalAll = allJasa.length + allOebu.length + allBul.length;
+
+    const jasa = allJasa.filter(r => r['상품명']?.trim() === selectedProduct);
+    const oebu = allOebu.filter(r => r['상품명']?.trim() === selectedProduct);
+    const bul = allBul.filter(r => r['상품명']?.trim() === selectedProduct);
+    const allRows = [...jasa, ...oebu, ...bul];
+    const total = allRows.length;
+
+    // 채널별 발생 비중 (자사몰 / 외부몰 채널명별 / 불량)
+    const channelMap: Record<string, number> = {};
+    if (jasa.length) channelMap['자사몰'] = jasa.length;
+    oebu.forEach(r => {
+      const ch = normalizeChannel(r['채널명']);
+      channelMap[ch] = (channelMap[ch] || 0) + 1;
+    });
+    if (bul.length) channelMap['불량'] = bul.length;
+    const channelArr = Object.entries(channelMap).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+
+    // 옵션 교환 흐름 TOP5 (자사몰+외부몰 통합, 불량은 옵션 유지 교환이 대부분이라 제외)
+    const swapMap: Record<string, number> = {};
+    [...jasa, ...oebu].forEach(r => {
+      const from = r['교환 전 옵션']?.trim() || '미지정';
+      const to = r['교환 출고 옵션']?.trim() || '미지정';
+      const key = `${from} → ${to}`;
+      swapMap[key] = (swapMap[key] || 0) + 1;
+    });
+    const topSwaps = Object.entries(swapMap)
+      .map(([pair, count]) => { const [from, to] = pair.split(' → '); return { from, to, count }; })
+      .sort((a, b) => b.count - a.count).slice(0, 5);
+
+    // 사이즈업/다운 요약
+    const dirCount = { sizeUp: 0, sizeDown: 0, colorOnly: 0, same: 0, both: 0, unknown: 0 };
+    [...jasa, ...oebu].forEach(r => { dirCount[swapDirection(r)]++; });
+
+    // 불량 유형 분포
+    const defectByCat: Record<string, { count: number; color: string; name: string }> = {};
+    let unclassified = 0;
+    bul.forEach(r => {
+      const cat = classifyDefect(r['불량 사유']);
+      if (!cat) { unclassified++; return; }
+      if (!defectByCat[cat.key]) defectByCat[cat.key] = { count: 0, color: cat.color, name: cat.name };
+      defectByCat[cat.key].count++;
+    });
+    const defectArr = Object.values(defectByCat).sort((a, b) => b.count - a.count);
+    const topDefectReasons = (() => {
+      const m: Record<string, number> = {};
+      bul.forEach(r => { const reason = r['불량 사유']?.trim() || '미분류'; m[reason] = (m[reason] || 0) + 1; });
+      return Object.entries(m).map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count).slice(0, 5);
+    })();
+
+    // 리드타임 (중앙값 + 최근 8주 추이)
+    const leadTimes = allRows.map(leadTimeDays).filter((v): v is number => v !== null);
+    const weekMap: Record<string, number[]> = {};
+    allRows.forEach(r => {
+      const lt = leadTimeDays(r);
+      if (lt === null) return;
+      const d = r['접수일']?.replace(/\./g, '-');
+      if (!d) return;
+      const wk = getWeekStr(new Date(d));
+      if (!weekMap[wk]) weekMap[wk] = [];
+      weekMap[wk].push(lt);
+    });
+    const weeklyTrend = Object.entries(weekMap)
+      .map(([week, arr]) => ({ week, leadTime: median(arr) || 0 }))
+      .sort((a, b) => a.week.localeCompare(b.week))
+      .slice(-8);
+
+    // 대분류/SKU 정보 + 옵션별 재고
+    const invRows = (data.data.inventory || []).filter(r => (r['ITEM'] || '').trim() === selectedProduct);
+    const category = invRows.find(r => r['대분류'])?.['대분류'] || '-';
+    const stockOptions = invRows
+      .map(r => ({
+        option: `${r['COLOR'] || ''} / ${r['SIZE'] || ''}`.trim(),
+        stock: parseInt((r['재고'] || '0').toString().replace(/,/g, ''), 10) || 0,
+        sku: r['SKU'] || '',
+      }))
+      .filter(o => o.sku)
+      .sort((a, b) => a.stock - b.stock);
+
+    return {
+      total, totalAll,
+      share: totalAll > 0 ? Math.round((total / totalAll) * 100 * 10) / 10 : 0,
+      channelArr, topSwaps, dirCount,
+      defectArr, unclassified, topDefectReasons, defectRate: total > 0 ? Math.round((bul.length / total) * 100) : 0,
+      leadMedian: median(leadTimes), weeklyTrend,
+      category, skuCount: invRows.length, stockOptions,
+    };
+  }, [data, selectedProduct, startDate, endDate]);
+
+  if (loading && !data) return (
+    <div className="flex h-[80vh] items-center justify-center text-indigo-600 font-black animate-pulse">상품별 심층 분석 데이터 집계 중...</div>
+  );
+
+  const PIE_COLORS = ['#6366f1', '#f97316', '#10b981', '#0ea5e9', '#f43f5e', '#a855f7'];
+
   return (
-    <div className="space-y-8 max-w-[1600px] mx-auto w-full relative pb-12">
-      {/* Product Search Section */}
-      <section className="p-8 bg-surface-container-low rounded-xl">
-        <div className="max-w-4xl mx-auto text-center mb-8">
-          <h2 className="text-3xl font-bold font-headline mb-2">상품별 심층 분석</h2>
-          <p className="text-on-surface-variant">상품명을 입력하여 출고, 교환, 결함 및 물류 리드타임을 한눈에 파악하세요.</p>
+    <div className="space-y-8 max-w-[1600px] mx-auto w-full pb-20">
+      {/* 헤더 */}
+      <div className="flex flex-wrap justify-between items-end gap-4">
+        <div>
+          <h2 className="text-3xl font-black text-slate-900 tracking-tight">상품별 상세 분석</h2>
+          <p className="text-sm text-slate-400 font-bold mt-1 uppercase tracking-widest opacity-70">Product-Level Exchange Deep Dive</p>
         </div>
-        <div className="max-w-3xl mx-auto relative group">
-          <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
-            <Icon name="search" className="text-primary text-2xl" />
-          </div>
-          <input 
-            className="w-full pl-16 pr-32 py-5 bg-surface-container-lowest rounded-2xl shadow-sm border-none focus:ring-2 focus:ring-primary/20 text-xl font-medium tracking-tight placeholder:text-slate-400" 
-            placeholder="상품명 또는 SKU 번호를 입력하세요..." 
-            type="text" 
-            defaultValue="울트라 라이트 패딩 자켓 (2024 Ver.)" 
+        <div className="flex gap-2 items-center bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
+          <DateFilter startDate={startDate} endDate={endDate} onStartDateChange={setStartDate} onEndDateChange={setEndDate} />
+          <button onClick={() => loadData(true)} className="p-2 hover:bg-slate-50 transition-colors border-l border-slate-100 ml-1">
+            <Icon name="sync" className={loading ? 'animate-spin text-indigo-600' : 'text-slate-400'} />
+          </button>
+        </div>
+      </div>
+
+      {/* 검색창 */}
+      <div className="bg-slate-900 p-8 rounded-[40px] shadow-xl relative">
+        <div className="relative max-w-2xl mx-auto">
+          <Icon name="search" className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="상품명을 검색하세요 (예: 쿨핏 브라 볼륨핏)..."
+            className="w-full bg-white/10 border border-white/20 rounded-2xl py-4 pl-14 pr-6 text-sm font-bold text-white placeholder:text-slate-400 focus:outline-none focus:bg-white/20 transition-all"
+            value={searchTerm}
+            onChange={(e) => { setSearchTerm(e.target.value); setSelectedProduct(null); }}
           />
-          <div className="absolute inset-y-2 right-2 flex items-center">
-            <button className="px-6 h-full bg-primary text-white font-bold rounded-xl flex items-center gap-2 hover:opacity-90 transition-opacity">
-              분석하기
-              <Icon name="arrow_forward" />
-            </button>
-          </div>
+          {searchTerm && !selectedProduct && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-slate-800 border border-white/10 rounded-2xl shadow-2xl max-h-[300px] overflow-y-auto z-50">
+              {productList.filter(p => p.toLowerCase().includes(searchTerm.toLowerCase())).slice(0, 30).map((p, i) => (
+                <div key={i} className="p-4 hover:bg-indigo-600 cursor-pointer text-xs font-bold text-white border-b border-white/5 last:border-0 transition-colors"
+                  onClick={() => { setSelectedProduct(p); setSearchTerm(p); }}>
+                  {p}
+                </div>
+              ))}
+              {productList.filter(p => p.toLowerCase().includes(searchTerm.toLowerCase())).length === 0 && (
+                <div className="p-4 text-xs text-slate-400 italic">일치하는 상품이 없습니다.</div>
+              )}
+            </div>
+          )}
         </div>
-      </section>
+      </div>
 
-      {/* Analysis Dashboard */}
-      <section className="space-y-8">
-        {/* Hero Stats Bento Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          {/* Main Product Card */}
-          <div className="md:col-span-2 bg-surface-container-lowest p-6 rounded-xl flex gap-6 relative overflow-hidden group">
-            <div className="absolute top-0 right-0 p-3 opacity-10">
-              <Icon name="inventory" className="text-8xl" />
-            </div>
-            <div className="w-32 h-40 bg-slate-100 rounded-lg overflow-hidden shrink-0">
-              <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuAjiLneHMHwW2GNLe5vNwGW0Faho4-fjqLQVkjaQCLuJnd7V1yDPtymwDHdag-xL5PijF7dBxbnnYevK5urUuMVN6W9RoV4iGWL2A4jqpTpPT3k-OWj-8vSArBGz8Xy_ShTlucqzZ6xZK2XT-YvveJTkvM53FQ7HxXWuDaCULmqdRx-_Oo7nBqmWy_X8HpLQfVv7KK5KXSKf8oG_VcbmV7VAAUN09aimsR37YUnA-CHrUEovFieHI3GCEPQIvzGhPf-QEXIlBtMf8A" alt="Product Image" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
-            </div>
-            <div className="flex flex-col justify-between">
-              <div>
-                <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded mb-2">SEASON BEST</span>
-                <h3 className="text-xl font-bold tracking-tight mb-1">울트라 라이트 패딩 자켓</h3>
-                <p className="text-sm text-on-surface-variant">SKU: JK-2024-UL-092 | 카테고리: 아우터</p>
-              </div>
+      {!selectedProduct || !analysis ? (
+        <div className="text-center py-24 border-2 border-dashed border-slate-200 rounded-[48px]">
+          <Icon name="search" className="text-6xl opacity-10 mb-6" />
+          <p className="text-sm font-black text-slate-300 uppercase tracking-widest">분석할 상품을 검색창에서 선택해 주세요</p>
+        </div>
+      ) : (
+        <>
+          {/* 히어로 + KPI */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <div className="lg:col-span-2 bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm">
+              <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded mb-2">{analysis.category}</span>
+              <h3 className="text-xl font-black tracking-tight mb-1">{selectedProduct}</h3>
+              <p className="text-xs text-slate-400 font-bold mb-6">SKU {analysis.skuCount}종 관리 중</p>
               <div className="flex gap-4">
-                <div className="px-4 py-2 bg-surface-container-low rounded-lg">
-                  <p className="text-[10px] text-on-surface-variant font-bold uppercase">총 출고량</p>
-                  <p className="text-xl font-black">12,482 <span className="text-xs font-normal">건</span></p>
+                <div className="px-4 py-3 bg-slate-50 rounded-xl">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase">조회기간 교환건수</p>
+                  <p className="text-xl font-black">{analysis.total.toLocaleString()}<span className="text-xs font-normal ml-1">건</span></p>
                 </div>
-                <div className="px-4 py-2 bg-surface-container-low rounded-lg">
-                  <p className="text-[10px] text-on-surface-variant font-bold uppercase">현재 재고</p>
-                  <p className="text-xl font-black text-primary">842 <span className="text-xs font-normal">건</span></p>
+                <div className="px-4 py-3 bg-slate-50 rounded-xl">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase">전체 교환 대비 비중</p>
+                  <p className="text-xl font-black text-indigo-600">{analysis.share}%</p>
                 </div>
               </div>
             </div>
-          </div>
-          {/* Metrics */}
-          <div className="bg-surface-container-lowest p-6 rounded-xl flex flex-col justify-between">
-            <div>
+            <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-between">
               <div className="flex justify-between items-start mb-4">
-                <span className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center">
-                  <Icon name="swap_horiz" className="text-indigo-600" />
-                </span>
-                <span className="text-[10px] font-bold text-error">+2.4% MoM</span>
+                <span className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center"><Icon name="report_problem" className="text-rose-600" /></span>
               </div>
-              <p className="text-sm font-medium text-on-surface-variant">교환율 (Exchange Rate)</p>
-              <h4 className="text-3xl font-bold font-headline">4.82%</h4>
+              <p className="text-sm font-medium text-slate-500 mb-1">불량 비중</p>
+              <h4 className="text-3xl font-black">{analysis.defectRate}%</h4>
             </div>
-            <div className="w-full bg-surface-container-low h-1.5 rounded-full mt-4 overflow-hidden">
-              <div className="bg-primary h-full w-[48%]"></div>
-            </div>
-          </div>
-          <div className="bg-surface-container-lowest p-6 rounded-xl flex flex-col justify-between">
-            <div>
+            <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col justify-between">
               <div className="flex justify-between items-start mb-4">
-                <span className="w-10 h-10 rounded-full bg-rose-50 flex items-center justify-center">
-                  <Icon name="report_problem" className="text-rose-600" />
-                </span>
-                <span className="text-[10px] font-bold text-tertiary-container">-1.2% MoM</span>
+                <span className="w-10 h-10 rounded-full bg-emerald-50 flex items-center justify-center"><Icon name="schedule" className="text-emerald-600" /></span>
               </div>
-              <p className="text-sm font-medium text-on-surface-variant">불량률 (Defective Rate)</p>
-              <h4 className="text-3xl font-bold font-headline">0.95%</h4>
-            </div>
-            <div className="w-full bg-surface-container-low h-1.5 rounded-full mt-4 overflow-hidden">
-              <div className="bg-rose-500 h-full w-[10%]"></div>
+              <p className="text-sm font-medium text-slate-500 mb-1">출고 리드타임 중앙값</p>
+              <h4 className="text-3xl font-black">{analysis.leadMedian !== null ? `${analysis.leadMedian}일` : '-'}</h4>
             </div>
           </div>
-        </div>
 
-        {/* Detailed Analysis Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column: Data Visuals */}
-          <div className="lg:col-span-2 space-y-8">
-            {/* Option Flow & Defect Distribution */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Option Flow */}
-              <div className="bg-surface-container-lowest p-6 rounded-xl border-l-4 border-indigo-500">
-                <div className="flex items-center justify-between mb-6">
-                  <h5 className="text-sm font-bold flex items-center gap-2">
-                    <Icon name="route" className="text-indigo-600" />
-                    교환 옵션 흐름 (From → To)
-                  </h5>
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 h-8 bg-surface-container-low rounded-md flex items-center px-3 text-xs font-medium">95 (M)</div>
-                    <Icon name="arrow_right_alt" className="text-slate-300" />
-                    <div className="flex-1 h-8 bg-indigo-50 text-indigo-700 rounded-md flex items-center px-3 text-xs font-bold">100 (L)</div>
-                    <span className="text-xs font-bold">62%</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 h-8 bg-surface-container-low rounded-md flex items-center px-3 text-xs font-medium">Black</div>
-                    <Icon name="arrow_right_alt" className="text-slate-300" />
-                    <div className="flex-1 h-8 bg-slate-900 text-white rounded-md flex items-center px-3 text-xs font-bold">Navy</div>
-                    <span className="text-xs font-bold">18%</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 h-8 bg-surface-container-low rounded-md flex items-center px-3 text-xs font-medium">105 (XL)</div>
-                    <Icon name="arrow_right_alt" className="text-slate-300" />
-                    <div className="flex-1 h-8 bg-indigo-50 text-indigo-700 rounded-md flex items-center px-3 text-xs font-bold">100 (L)</div>
-                    <span className="text-xs font-bold">12%</span>
-                  </div>
-                </div>
-                <p className="mt-6 text-[11px] text-on-surface-variant leading-relaxed">
-                  <span className="font-bold text-indigo-600">인사이트:</span> 해당 상품은 '정사이즈보다 작게 나옴' 피드백이 많아 한 단계 큰 사이즈로의 교환이 지배적입니다.
-                </p>
-              </div>
-
-              {/* Defect Distribution */}
-              <div className="bg-surface-container-lowest p-6 rounded-xl border-l-4 border-rose-500">
-                <h5 className="text-sm font-bold flex items-center gap-2 mb-6">
-                  <Icon name="broken_image" className="text-rose-600" />
-                  주요 결함 유형 분포
-                </h5>
-                <div className="relative h-32 flex items-end gap-2">
-                  <div className="flex-1 flex flex-col items-center gap-2">
-                    <div className="w-full bg-rose-200 rounded-t-md transition-all hover:bg-rose-400" style={{ height: '70%' }}></div>
-                    <span className="text-[10px] text-on-surface-variant text-center leading-tight">봉제<br/>불량</span>
-                  </div>
-                  <div className="flex-1 flex flex-col items-center gap-2">
-                    <div className="w-full bg-rose-200 rounded-t-md transition-all hover:bg-rose-400" style={{ height: '40%' }}></div>
-                    <span className="text-[10px] text-on-surface-variant text-center leading-tight">충전재<br/>쏠림</span>
-                  </div>
-                  <div className="flex-1 flex flex-col items-center gap-2">
-                    <div className="w-full bg-rose-200 rounded-t-md transition-all hover:bg-rose-400" style={{ height: '25%' }}></div>
-                    <span className="text-[10px] text-on-surface-variant text-center leading-tight">지퍼<br/>결함</span>
-                  </div>
-                  <div className="flex-1 flex flex-col items-center gap-2">
-                    <div className="w-full bg-rose-200 rounded-t-md transition-all hover:bg-rose-400" style={{ height: '15%' }}></div>
-                    <span className="text-[10px] text-on-surface-variant text-center leading-tight">오염</span>
-                  </div>
-                </div>
-                <div className="mt-4 pt-4 border-t border-slate-100 flex justify-between text-[11px]">
-                  <span className="text-on-surface-variant">총 결함 건수: 118건</span>
-                  <span className="font-bold text-rose-600">관리 필요</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Lead Time Trend Chart Area */}
-            <div className="bg-surface-container-lowest p-8 rounded-xl">
-              <div className="flex justify-between items-center mb-10">
-                <div>
-                  <h5 className="text-lg font-bold">물류 리드타임 추이 (최근 8주)</h5>
-                  <p className="text-xs text-on-surface-variant">출고부터 도착까지의 평균 소요 시간</p>
-                </div>
-                <div className="flex gap-2">
-                  <span className="flex items-center gap-1.5 text-xs font-medium"><span className="w-2 h-2 rounded-full bg-primary"></span> 평균</span>
-                  <span className="flex items-center gap-1.5 text-xs font-medium"><span className="w-2 h-2 rounded-full bg-tertiary-fixed-dim"></span> 목표</span>
-                </div>
-              </div>
-              <div className="h-64 flex items-end justify-between px-4 relative">
-                {/* Horizontal Grid Lines */}
-                <div className="absolute inset-x-0 bottom-0 h-full flex flex-col justify-between pointer-events-none opacity-10">
-                  <div className="border-t border-on-surface w-full"></div>
-                  <div className="border-t border-on-surface w-full"></div>
-                  <div className="border-t border-on-surface w-full"></div>
-                  <div className="border-t border-on-surface w-full"></div>
-                </div>
-                {/* Mock Bars */}
+          {/* 사이즈 방향 + 채널 비중 */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="lg:col-span-7 bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm">
+              <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight mb-6">사이즈 교환 방향</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 {[
-                  { label: '8주 전', h: 'h-32', bg: 'bg-surface-container-high group-hover:bg-primary' },
-                  { label: '7주 전', h: 'h-40', bg: 'bg-surface-container-high group-hover:bg-primary' },
-                  { label: '6주 전', h: 'h-36', bg: 'bg-surface-container-high group-hover:bg-primary' },
-                  { label: 'Peak', h: 'h-52', bg: 'bg-primary', color: 'text-primary' },
-                  { label: '4주 전', h: 'h-44', bg: 'bg-surface-container-high group-hover:bg-primary' },
-                  { label: '3주 전', h: 'h-36', bg: 'bg-surface-container-high group-hover:bg-primary' },
-                  { label: '2주 전', h: 'h-32', bg: 'bg-surface-container-high group-hover:bg-primary' },
-                  { label: '현재', h: 'h-28', bg: 'bg-primary', color: 'text-primary' },
-                ].map((bar, i) => (
-                  <div key={i} className="w-12 group relative flex flex-col items-center">
-                    <div className={`w-8 rounded-t-lg transition-all ${bar.bg} ${bar.h}`}></div>
-                    <span className={`mt-3 text-[10px] font-${bar.color ? 'bold' : 'medium'} ${bar.color || ''}`}>{bar.label}</span>
+                  { label: '사이즈 업', value: analysis.dirCount.sizeUp, color: 'text-indigo-600 bg-indigo-50' },
+                  { label: '사이즈 다운', value: analysis.dirCount.sizeDown, color: 'text-orange-600 bg-orange-50' },
+                  { label: '색상만 변경', value: analysis.dirCount.colorOnly, color: 'text-emerald-600 bg-emerald-50' },
+                  { label: '색상+사이즈', value: analysis.dirCount.both, color: 'text-slate-600 bg-slate-50' },
+                  { label: '동일 재출고', value: analysis.dirCount.same, color: 'text-rose-600 bg-rose-50' },
+                ].map((m, i) => (
+                  <div key={i} className={`rounded-2xl p-4 text-center ${m.color.split(' ')[1]}`}>
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{m.label}</p>
+                    <p className={`text-2xl font-black ${m.color.split(' ')[0]}`}>{m.value}</p>
+                  </div>
+                ))}
+              </div>
+              {analysis.dirCount.sizeUp + analysis.dirCount.sizeDown > 0 && (
+                <p className="mt-6 text-[11px] text-slate-400 leading-relaxed">
+                  <span className="font-bold text-indigo-600">인사이트: </span>
+                  {analysis.dirCount.sizeUp > analysis.dirCount.sizeDown
+                    ? '사이즈업이 더 많음 — "작게 나온다"는 피드백일 가능성.'
+                    : analysis.dirCount.sizeDown > analysis.dirCount.sizeUp
+                    ? '사이즈다운이 더 많음 — "크게 나온다"는 피드백일 가능성.'
+                    : '사이즈업/다운이 비슷한 비중.'}
+                </p>
+              )}
+            </div>
+            <div className="lg:col-span-5 bg-white p-8 rounded-[32px] border border-slate-100 shadow-sm">
+              <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight mb-6 text-center">채널별 발생 비중</h4>
+              <div className="h-[220px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={analysis.channelArr} innerRadius={55} outerRadius={80} paddingAngle={6} dataKey="count">
+                      {analysis.channelArr.map((_e, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="mt-4 space-y-2">
+                {analysis.channelArr.map((c, i) => (
+                  <div key={i} className="flex justify-between items-center text-xs font-bold">
+                    <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}></span>
+                      <span className="text-slate-500">{c.name}</span>
+                    </div>
+                    <span className="text-slate-900">{c.count}건</span>
                   </div>
                 ))}
               </div>
             </div>
           </div>
 
-          {/* Right Column: Interactive AI & Notes */}
-          <div className="space-y-6">
-            {/* Ask/Answer Interactive Panel */}
-            <div className="bg-primary-container text-white p-6 rounded-2xl shadow-lg relative overflow-hidden">
-              <div className="absolute -top-10 -right-10 w-40 h-40 bg-white/10 rounded-full blur-3xl"></div>
-              <h5 className="text-lg font-bold mb-4 flex items-center gap-2">
-                <Icon name="auto_awesome" />
-                Smart Insight AI
-              </h5>
-              <div className="space-y-4 mb-6 relative z-10">
-                <button className="w-full text-left bg-white/10 hover:bg-white/20 p-3 rounded-xl text-xs font-medium transition-colors flex justify-between items-center group">
-                  어느 지역에서 교환이 가장 많나요?
-                  <Icon name="send" className="text-sm opacity-0 group-hover:opacity-100 transition-opacity" />
-                </button>
-                <button className="w-full text-left bg-white/10 hover:bg-white/20 p-3 rounded-xl text-xs font-medium transition-colors flex justify-between items-center group">
-                  최근 리드타임 지연 원인이 무엇인가요?
-                  <Icon name="send" className="text-sm opacity-0 group-hover:opacity-100 transition-opacity" />
-                </button>
-                <button className="w-full text-left bg-white/10 hover:bg-white/20 p-3 rounded-xl text-xs font-medium transition-colors flex justify-between items-center group">
-                  이 상품의 재고 소진 예상 시점은?
-                  <Icon name="send" className="text-sm opacity-0 group-hover:opacity-100 transition-opacity" />
-                </button>
-              </div>
-              <div className="relative z-10">
-                <input className="w-full bg-white/20 border-none rounded-lg py-3 px-4 text-xs placeholder:text-white/60 focus:ring-1 focus:ring-white/50" placeholder="직접 질문을 입력하세요..." type="text" />
-              </div>
-            </div>
-
-            {/* Operational Notes */}
-            <div className="bg-surface-container-lowest p-6 rounded-xl">
-              <h5 className="text-sm font-bold mb-4 flex items-center gap-2">
-                <Icon name="description" className="text-amber-500" />
-                운영 특이사항 (Logs)
-              </h5>
-              <div className="space-y-4">
-                <div className="flex gap-3">
-                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 mt-1.5 shrink-0"></div>
-                  <div>
-                    <p className="text-xs font-bold">2024.03.12</p>
-                    <p className="text-xs text-on-surface-variant leading-relaxed">C사 물류센터 파업으로 인해 수도권 외곽 리드타임 +1.2일 증가.</p>
-                  </div>
-                </div>
-                <div className="flex gap-3">
-                  <div className="w-1.5 h-1.5 rounded-full bg-slate-300 mt-1.5 shrink-0"></div>
-                  <div>
-                    <p className="text-xs font-bold">2024.03.05</p>
-                    <p className="text-xs text-on-surface-variant leading-relaxed">색상 'Navy'의 원단 수급 문제로 추가 생산 일정 2주 지연 확정.</p>
-                  </div>
-                </div>
-                <div className="flex gap-3">
-                  <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 shrink-0"></div>
-                  <div>
-                    <p className="text-xs font-bold text-indigo-600">Action Taken</p>
-                    <p className="text-xs text-on-surface-variant leading-relaxed">사이즈 교환 방지를 위한 상세 페이지 내 '실측 비교 가이드' 업데이트 완료.</p>
-                  </div>
-                </div>
-              </div>
-              <button className="w-full mt-6 py-2 border border-slate-100 rounded-lg text-xs font-bold text-on-surface-variant hover:bg-slate-50 transition-colors">
-                전체 로그 보기
-              </button>
-            </div>
-
-            {/* Stock Status Quick View */}
-            <div className="bg-surface-container-lowest p-6 rounded-xl">
-              <h5 className="text-sm font-bold mb-4">옵션별 실시간 재고</h5>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-medium">95 (M) / Black</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div className="bg-error h-full w-[12%]"></div>
+          {/* 옵션 교환 흐름 */}
+          <div className="bg-indigo-600 p-10 rounded-[48px] shadow-2xl text-white relative overflow-hidden">
+            <Icon name="swap_horiz" className="absolute -right-10 -bottom-10 text-[200px] opacity-10 rotate-12" />
+            <div className="relative z-10">
+              <h3 className="text-2xl font-black tracking-tight mb-1 uppercase">옵션 교환 흐름 TOP5</h3>
+              <p className="text-xs font-bold opacity-70 uppercase tracking-widest mb-8">자사몰 + 외부몰 통합</p>
+              {analysis.topSwaps.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {analysis.topSwaps.map((opt, i) => (
+                    <div key={i} className="bg-white/10 border border-white/10 p-6 rounded-[32px]">
+                      <div className="flex justify-between items-center mb-6">
+                        <span className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">Top {i + 1}</span>
+                        <span className="text-xl font-black">{opt.count} <span className="text-[10px] opacity-50">건</span></span>
+                      </div>
+                      <div className="flex items-center gap-4 justify-between">
+                        <div className="flex-1 text-center"><p className="text-[10px] font-black opacity-50 uppercase mb-1">Before</p><p className="text-xs font-black line-clamp-1">{opt.from}</p></div>
+                        <Icon name="east" />
+                        <div className="flex-1 text-center"><p className="text-[10px] font-black opacity-50 uppercase mb-1">After</p><p className="text-xs font-black line-clamp-1">{opt.to}</p></div>
+                      </div>
                     </div>
-                    <span className="text-[10px] font-bold text-error">12개</span>
-                  </div>
+                  ))}
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-medium">100 (L) / Black</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div className="bg-primary h-full w-[85%]"></div>
-                    </div>
-                    <span className="text-[10px] font-bold">412개</span>
-                  </div>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xs font-medium">105 (XL) / Navy</span>
-                  <div className="flex items-center gap-2">
-                    <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div className="bg-primary h-full w-[45%]"></div>
-                    </div>
-                    <span className="text-[10px] font-bold">218개</span>
-                  </div>
-                </div>
-              </div>
+              ) : (
+                <div className="text-center py-16 opacity-40 italic font-bold">옵션 교환 데이터가 없습니다.</div>
+              )}
             </div>
           </div>
-        </div>
-      </section>
 
-      {/* Floating Action for Print/Export */}
-      <div className="fixed bottom-8 right-8 flex flex-col gap-3 z-50">
-        <button className="w-14 h-14 bg-white shadow-2xl rounded-full flex items-center justify-center text-on-surface hover:scale-110 transition-transform border border-slate-100">
-          <Icon name="print" />
-        </button>
-        <button className="w-14 h-14 bg-primary shadow-2xl rounded-full flex items-center justify-center text-white hover:scale-110 transition-transform">
-          <Icon name="download" />
-        </button>
-      </div>
+          {/* 불량 유형 분포 */}
+          <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm">
+            <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight mb-6">불량 유형 분포</h4>
+            {analysis.defectArr.length === 0 && analysis.unclassified === 0 ? (
+              <p className="text-center py-12 text-slate-300 font-bold italic">조회 기간 내 불량 이력이 없습니다.</p>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <div className="space-y-4">
+                  {analysis.defectArr.map((cat, i) => (
+                    <div key={i}>
+                      <div className="flex justify-between text-xs font-bold mb-1">
+                        <span className="text-slate-700">{cat.name}</span>
+                        <span style={{ color: cat.color }}>{cat.count}건</span>
+                      </div>
+                      <div className="h-2 w-full bg-slate-50 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full" style={{ backgroundColor: cat.color, width: `${(cat.count / (analysis.defectArr[0]?.count || 1)) * 100}%` }}></div>
+                      </div>
+                    </div>
+                  ))}
+                  {analysis.unclassified > 0 && (
+                    <p className="text-[11px] text-slate-400 italic">확인필요/미분류 {analysis.unclassified}건 별도</p>
+                  )}
+                </div>
+                <div className="bg-slate-50 rounded-2xl p-6">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">주요 불량 사유 TOP5</p>
+                  <div className="space-y-3">
+                    {analysis.topDefectReasons.map((r, i) => (
+                      <div key={i} className="flex justify-between items-center text-xs font-bold">
+                        <span className="text-slate-600">#{i + 1} {r.reason}</span>
+                        <span className="text-rose-600">{r.count}건</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 리드타임 추이 */}
+          <div className="bg-white p-10 rounded-[32px] border border-slate-100 shadow-sm">
+            <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight mb-8">출고 리드타임 추이 (최근 8주)</h4>
+            {analysis.weeklyTrend.length > 0 ? (
+              <div className="h-[280px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={analysis.weeklyTrend}>
+                    <defs>
+                      <linearGradient id="colorLead" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} /><stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="week" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 800 }} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 800 }} allowDecimals={false} />
+                    <Tooltip contentStyle={{ borderRadius: '16px', border: 'none' }} />
+                    <Area type="monotone" dataKey="leadTime" name="리드타임(일)" stroke="#10b981" strokeWidth={3} fill="url(#colorLead)" dot={{ r: 3, fill: '#10b981' }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-center py-12 text-slate-300 font-bold italic">리드타임을 계산할 출고 완료 건이 없습니다.</p>
+            )}
+          </div>
+
+          {/* 옵션별 재고 */}
+          <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm">
+            <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight mb-6">옵션별 현재 재고</h4>
+            {analysis.stockOptions.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      <th className="py-3 pr-4">옵션 (컬러/사이즈)</th>
+                      <th className="py-3 pr-4">SKU</th>
+                      <th className="py-3 text-right">재고</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {analysis.stockOptions.map((o, i) => (
+                      <tr key={i} className="hover:bg-slate-50/50">
+                        <td className="py-3 pr-4 text-xs font-bold text-slate-800">{o.option || '-'}</td>
+                        <td className="py-3 pr-4 text-xs font-mono text-slate-400">{o.sku}</td>
+                        <td className="py-3 text-right">
+                          <span className={`text-xs font-black px-2 py-1 rounded-lg ${o.stock < 100 ? 'bg-rose-50 text-rose-600' : 'bg-slate-50 text-slate-700'}`}>
+                            {o.stock.toLocaleString()}개{o.stock < 100 && ' · LOW'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-center py-12 text-slate-300 font-bold italic">재고관리 시트에서 이 상품의 옵션 정보를 찾을 수 없습니다.</p>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 };

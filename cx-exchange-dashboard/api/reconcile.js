@@ -1,5 +1,6 @@
 import { JWT } from 'google-auth-library';
 import { createRequire } from 'module';
+import { resolveColumns } from './_columns.js';
 
 const RETURNS_SS_ID  = '1B6UKmborJQCAKIrIBziAFMjKR0CfY8Jul1E_Rbs5C3Y';
 const EXCHANGE_SS_ID = '1cqLifjcihpHlAUN9ZcG19uJ9MhdkYcOxLzMDPcaBufg';
@@ -117,26 +118,26 @@ function safeGet(row, idx) {
   return (row?.[idx] ?? '').toString().trim();
 }
 
-// ── 반품입고시트 (C:O) 인덱스 ────────────────────────────────────
-// C=0 확인완료일, E=2 구분, J=7 주문번호, M=10 상품명/옵션명, N=11 수량, O=12 실수량
-const RC_DONE_DATE = 0;
-const RC_CATEGORY  = 2;
-const RC_ORDER_NO  = 7;
-const RC_ITEM      = 10;
-const RC_QTY       = 11;
-const RC_REAL_QTY  = 12;
-const WRITE_R_DONE_COL = 3; // C열
-
-// ── 교환접수시트 (B:K) 인덱스 ────────────────────────────────────
-// B=0 출고일, E=3 지불방법, G=5 주문번호, H=6 교환전옵션, I=7 상품명, J=8 교환출고옵션, K=9 수량
-const EC_SHIP_DATE  = 0;
-const EC_PAY_METHOD = 3;
-const EC_ORDER_NO   = 5;
-const EC_PREV_OPT   = 6;
-const EC_ITEM_NAME  = 7;
-const EC_NEW_OPT    = 8;
-const EC_QTY        = 9;
-const WRITE_E_SHIP_COL = 2; // B열
+// 반품입고시트/교환접수시트에서 찾아야 하는 헤더 이름
+// (열 위치는 헤더 텍스트로 매번 다시 찾음 — 시트 구조가 바뀌어도 안전하도록.
+// 2026-07-09: "수동구분" 열 삭제로 이후 열이 통째로 밀려 조용히 오작동한 사고 이후 도입)
+const RETURNS_HEADER_SPEC = {
+  doneDate: '완료일',
+  category: '구분',
+  orderNo: '주문번호',
+  item: '상품명/옵션명',
+  qty: '수량',
+  realQty: '실수량',
+};
+const EXCHANGE_HEADER_SPEC = {
+  shipDate: '출고일',
+  payMethod: '지불방법',
+  orderNo: '주문번호',
+  prevOpt: '교환 전 옵션',
+  itemName: '상품명',
+  newOpt: '교환 출고 옵션',
+  qty: '수량',
+};
 
 // 카테고리별 설정: 대상 교환접수시트 이름 + 유효한 지불방법 값
 // 외부몰은 '결제'(이미 결제완료, 자사몰의 '입금확인'과 동일 취급)와
@@ -154,16 +155,16 @@ const CATEGORY_CONFIGS = {
 
 // ── 파싱 ─────────────────────────────────────────────────────────
 // rowOffset: 시트에서 실제 읽기 시작한 행번호 (1-based)
-function parseReturns(rows, rowOffset, category) {
+function parseReturns(rows, rowOffset, category, cols) {
   const groups = {};
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (safeGet(row, RC_DONE_DATE)) continue;
-    if (safeGet(row, RC_CATEGORY) !== category) continue;
-    const orderNo = safeGet(row, RC_ORDER_NO);
+    if (safeGet(row, cols.doneDate)) continue;
+    if (safeGet(row, cols.category) !== category) continue;
+    const orderNo = safeGet(row, cols.orderNo);
     if (!orderNo) continue;
-    const item = safeGet(row, RC_ITEM);
-    const qtyRaw = safeGet(row, RC_REAL_QTY) || safeGet(row, RC_QTY);
+    const item = safeGet(row, cols.item);
+    const qtyRaw = safeGet(row, cols.realQty) || safeGet(row, cols.qty);
     const qty = parseInt(qtyRaw) || 0;
     if (!groups[orderNo]) groups[orderNo] = [];
     groups[orderNo].push({ row: rowOffset + i, item, qty });
@@ -171,22 +172,22 @@ function parseReturns(rows, rowOffset, category) {
   return groups;
 }
 
-function parseExchanges(rows, rowOffset) {
+function parseExchanges(rows, rowOffset, cols) {
   const groups = {};
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const orderNo = safeGet(row, EC_ORDER_NO);
+    const orderNo = safeGet(row, cols.orderNo);
     if (!orderNo) continue;
-    const itemKey = safeGet(row, EC_ITEM_NAME) + safeGet(row, EC_PREV_OPT);
-    const qty = parseInt(safeGet(row, EC_QTY)) || 0;
+    const itemKey = safeGet(row, cols.itemName) + safeGet(row, cols.prevOpt);
+    const qty = parseInt(safeGet(row, cols.qty)) || 0;
     if (!groups[orderNo]) groups[orderNo] = [];
     groups[orderNo].push({
       row: rowOffset + i,
       itemKey,
       qty,
-      pay: safeGet(row, EC_PAY_METHOD),
-      newOpt: safeGet(row, EC_NEW_OPT),
-      existingShipDate: safeGet(row, EC_SHIP_DATE),
+      pay: safeGet(row, cols.payMethod),
+      newOpt: safeGet(row, cols.newOpt),
+      existingShipDate: safeGet(row, cols.shipDate),
     });
   }
   return groups;
@@ -277,12 +278,12 @@ function reconcile(returnsGroups, exchangeGroups, today, validPay) {
 }
 
 // ── 시트 반영 ────────────────────────────────────────────────────
-async function applyActions(jwt, actions, exchangeSheet) {
+async function applyActions(jwt, actions, exchangeSheet, excShipCol, retDoneCol) {
   const excUpdates = actions.filter(act => !act.skipShipWrite).flatMap(act =>
-    act.exchange_rows.map(row => ({ range: `'${exchangeSheet}'!${rowColToA1(row, WRITE_E_SHIP_COL)}`, values: [[act.ship_date]] }))
+    act.exchange_rows.map(row => ({ range: `'${exchangeSheet}'!${rowColToA1(row, excShipCol)}`, values: [[act.ship_date]] }))
   );
   const retUpdates = actions.flatMap(act =>
-    act.return_rows.map(row => ({ range: `'판토스_입고리스트'!${rowColToA1(row, WRITE_R_DONE_COL)}`, values: [[act.done_date]] }))
+    act.return_rows.map(row => ({ range: `'판토스_입고리스트'!${rowColToA1(row, retDoneCol)}`, values: [[act.done_date]] }))
   );
 
   if (excUpdates.length) await sheetsBatchUpdate(jwt, EXCHANGE_SS_ID, excUpdates);
@@ -303,6 +304,14 @@ export default async function handler(req, res) {
   try {
     const jwt = getJwt();
 
+    // 헤더 행을 먼저 읽어 열 위치를 확인 (항상 A열부터 절대 인덱스로 통일)
+    const [retHeader, excHeader] = await Promise.all([
+      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!1:1`),
+      sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!1:1`),
+    ]);
+    const retCols = resolveColumns(retHeader[0], RETURNS_HEADER_SPEC, '판토스_입고리스트');
+    const excCols = resolveColumns(excHeader[0], EXCHANGE_HEADER_SPEC, config.exchangeSheet);
+
     // 반품입고시트(판토스_입고리스트)는 완료 건을 수동으로 주기적으로
     // 히스토리 시트로 이관해 작게(미처리 건만) 유지하므로, 전체를 그냥
     // 한 번에 읽는다. (예전엔 E열 거대 수식 때문에 청크로 나눠 읽어야
@@ -310,18 +319,18 @@ export default async function handler(req, res) {
     // 업데이트기록.md 2026-07-06 참고)
     const START_ROW = 3;
     const [retRows, excRows] = await Promise.all([
-      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!C${START_ROW}:O`),
-      sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!B${START_ROW}:K`),
+      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!A${START_ROW}:Z`),
+      sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${START_ROW}:Z`),
     ]);
 
-    const returnsGroups  = parseReturns(retRows, START_ROW, category);
-    const exchangeGroups = parseExchanges(excRows, START_ROW);
+    const returnsGroups  = parseReturns(retRows, START_ROW, category, retCols);
+    const exchangeGroups = parseExchanges(excRows, START_ROW, excCols);
 
     const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today, config.validPay);
 
     let applied = null;
     if (apply && actions.length > 0) {
-      applied = await applyActions(jwt, actions, config.exchangeSheet);
+      applied = await applyActions(jwt, actions, config.exchangeSheet, excCols.shipDate + 1, retCols.doneDate + 1);
     }
 
     res.json({ actions, issues, applied, today, category });

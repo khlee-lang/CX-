@@ -5,23 +5,28 @@
 // 완료된 건은 주기적으로 히스토리 시트로 옮겨서 미처리함을 작게 유지한다.
 //
 // 판정 규칙:
-//   - 같은 주문번호(J열)를 그룹으로 묶는다.
-//   - 그룹 안 모든 행의 완료일(C열)에 날짜(YYYY-MM-DD)가 "포함"되어 있어야
+//   - 같은 주문번호를 그룹으로 묶는다.
+//   - 그룹 안 모든 행의 완료일에 날짜(YYYY-MM-DD)가 "포함"되어 있어야
 //     이관 대상. ("(무료)2026-06-10" 처럼 접두어가 붙어도 인정)
 //   - 하나라도 날짜가 없거나("확인필요", "고객확인중-이름", "교환" 등) 비어있으면
 //     그룹 전체를 미처리함에 그대로 둔다 (부분완료로 인한 오배송 방지).
+//
+// 주문번호/완료일 열 위치는 고정 문자가 아니라 헤더 텍스트로 매번 찾는다 —
+// 2026-07-09, "수동구분" 열 삭제로 이후 열이 밀려 조용히 잘못된 열을 읎던
+// 사고 이후 도입. 또한 행을 그대로 복사하는 방식이라 반품입고시트와
+// 히스토리시트의 열 구성이 완전히 같아야 하므로, 이관 전에 헤더가
+// 일치하는지 검증하고 다르면 중단한다.
 //
 // POST { apply: false } → 미리보기(몇 건이 이관될지만 계산)
 // POST { apply: true }  → 실제로 이관 (쓰기 검증 성공 후에만 삭제)
 
 import { JWT } from 'google-auth-library';
 import { createRequire } from 'module';
+import { resolveColumns } from './_columns.js';
 
 const RETURNS_SS_ID = '1B6UKmborJQCAKIrIBziAFMjKR0CfY8Jul1E_Rbs5C3Y';
 const PENDING = '판토스_입고리스트';
 const HISTORY = '판토스_입고_히스토리';
-const ORDER_NO_IDX = 9;   // A열 기준 0-based (J열)
-const DONE_DATE_IDX = 2;  // A열 기준 0-based (C열)
 const DATE_RE = /\d{4}-\d{2}-\d{2}/;
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
 const FETCH_TIMEOUT_MS = 20000;
@@ -125,10 +130,10 @@ async function getSheetMeta(jwt) {
   });
 }
 
-function findArchiveRows(rows) {
+function findArchiveRows(rows, orderNoIdx, doneDateIdx) {
   const groups = {};
   rows.forEach((row, i) => {
-    const orderNo = (row[ORDER_NO_IDX] || '').toString().trim();
+    const orderNo = (row[orderNoIdx] || '').toString().trim();
     if (!orderNo) return;
     if (!groups[orderNo]) groups[orderNo] = [];
     groups[orderNo].push({ absRow: 3 + i, values: row });
@@ -137,9 +142,9 @@ function findArchiveRows(rows) {
   const archiveRows = [];
   let partialGroups = 0, partialRowCount = 0;
   for (const members of Object.values(groups)) {
-    const allDone = members.every(m => DATE_RE.test((m.values[DONE_DATE_IDX] || '').toString().trim()));
+    const allDone = members.every(m => DATE_RE.test((m.values[doneDateIdx] || '').toString().trim()));
     if (allDone) archiveRows.push(...members);
-    else if (members.some(m => (m.values[DONE_DATE_IDX] || '').toString().trim())) {
+    else if (members.some(m => (m.values[doneDateIdx] || '').toString().trim())) {
       partialGroups++;
       partialRowCount += members.length;
     }
@@ -156,8 +161,21 @@ export default async function handler(req, res) {
   try {
     const jwt = getJwt();
 
+    // 주문번호/완료일 열 위치를 헤더에서 찾고, 히스토리시트 헤더와 완전히
+    // 같은지 검증 (다르면 행을 그대로 복사할 때 열이 어긋나므로 중단)
+    const [pendingHeader, historyHeader] = await Promise.all([
+      sheetsGet(jwt, `'${PENDING}'!1:1`),
+      sheetsGet(jwt, `'${HISTORY}'!1:1`),
+    ]);
+    const cols = resolveColumns(pendingHeader[0], { orderNo: '주문번호', doneDate: '완료일' }, PENDING);
+    const pendingH = (pendingHeader[0] || []).map(h => (h || '').toString().trim());
+    const historyH = (historyHeader[0] || []).map(h => (h || '').toString().trim());
+    if (JSON.stringify(pendingH) !== JSON.stringify(historyH)) {
+      throw new Error(`${PENDING}와 ${HISTORY}의 헤더 열 구성이 다릅니다 — 행을 그대로 복사하면 데이터가 어긋납니다. (${PENDING}: ${pendingH.join(', ')} / ${HISTORY}: ${historyH.join(', ')})`);
+    }
+
     const rows = await sheetsGet(jwt, `'${PENDING}'!A3:AC`);
-    const { archiveRows, totalGroups, partialGroups, partialRowCount } = findArchiveRows(rows);
+    const { archiveRows, totalGroups, partialGroups, partialRowCount } = findArchiveRows(rows, cols.orderNo, cols.doneDate);
 
     if (!apply || archiveRows.length === 0) {
       return res.json({

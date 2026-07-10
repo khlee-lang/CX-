@@ -38,6 +38,7 @@ type Status = 'idle' | 'loading' | 'preview' | 'applying' | 'done' | 'error';
 const ISSUE_TYPE_COLOR: Record<string, string> = {
   '주문없음':        'bg-yellow-100 text-yellow-800',
   '상품불일치':      'bg-red-100 text-red-700',
+  '카테고리혼재':    'bg-pink-100 text-pink-700',
   '지불방법혼재':    'bg-orange-100 text-orange-700',
   '알수없는지불방법':'bg-purple-100 text-purple-700',
 };

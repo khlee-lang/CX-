@@ -204,14 +204,18 @@ app.post('/api/reconcile', async (req, res) => {
   function arrivalTag(d) { const dt = new Date(d); return `입고${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}`; }
   function sg(row, i) { return (row?.[i] ?? '').toString().trim(); }
 
+  // 카테고리로 미리 걸러내지 않고 전부 그룹에 담는다 (2026-07-10) — 신청하지
+  // 않은 상품이 같이 반품되면 그 행 구분값이 다르게 매겨지는데, 여기서
+  // 미리 걸러내면 reconcile()이 그 사실을 알 수 없어 "정상 처리"로
+  // 잘못 통과시키는 사고가 있었음.
   function parseReturns(rows, rowOffset, cols) {
     const g = {};
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      if (sg(r,cols.doneDate)) continue; if (sg(r,cols.category) !== category) continue;
+      if (sg(r,cols.doneDate)) continue;
       const o = sg(r,cols.orderNo); if (!o) continue;
       if (!g[o]) g[o] = [];
-      g[o].push({ row: rowOffset+i, item: sg(r,cols.item), qty: parseInt(sg(r,cols.realQty)||sg(r,cols.qty))||0 });
+      g[o].push({ row: rowOffset+i, item: sg(r,cols.item), qty: parseInt(sg(r,cols.realQty)||sg(r,cols.qty))||0, category: sg(r,cols.category) });
     }
     return g;
   }
@@ -232,9 +236,18 @@ app.post('/api/reconcile', async (req, res) => {
     if (kR.length!==kE.length) return false;
     return kR.every((k,i)=>k===kE[i]&&cR[k]===cE[k]);
   }
-  function reconcile(rg, eg, t, validPay) {
+  function reconcile(rg, eg, t, validPay, category) {
     const actions=[], issues=[];
-    for (const [o, retRows] of Object.entries(rg)) {
+    for (const [o, allRetRows] of Object.entries(rg)) {
+      if (!allRetRows.some(r=>r.category===category)) continue;
+
+      const categories = [...new Set(allRetRows.map(r=>r.category))];
+      if (categories.length > 1) {
+        issues.push({order_no:o,issue_type:'카테고리혼재',description:`반품입고시트에 이 주문번호로 구분값이 여러 개 섞여 있습니다(${categories.join(', ')}) — 신청하지 않은 상품이 같이 반품됐을 수 있습니다.`,return_rows:allRetRows.map(r=>r.row)});
+        continue;
+      }
+
+      const retRows = allRetRows;
       const excRows = eg[o];
       if (!excRows) { issues.push({order_no:o,issue_type:'주문없음',description:'교환접수시트에 해당 주문번호가 없습니다.',return_rows:retRows.map(r=>r.row)}); continue; }
       if (!counterEqual(retRows,excRows)) { issues.push({order_no:o,issue_type:'상품불일치',description:'반품입고와 교환접수의 상품/옵션/수량이 일치하지 않습니다.',return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
@@ -269,7 +282,7 @@ app.post('/api/reconcile', async (req, res) => {
       sheetsGet(RETURNS_SS_ID, `'판토스_입고리스트'!A${START_ROW}:Z`),
       sheetsGet(EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${START_ROW}:Z`),
     ]);
-    const {actions,issues} = reconcile(parseReturns(retRows, START_ROW, retCols), parseExchanges(excRows, START_ROW, excCols), today, config.validPay);
+    const {actions,issues} = reconcile(parseReturns(retRows, START_ROW, retCols), parseExchanges(excRows, START_ROW, excCols), today, config.validPay, category);
     let applied = null;
     if (apply && actions.length > 0) {
       const excShipCol = excCols.shipDate + 1;

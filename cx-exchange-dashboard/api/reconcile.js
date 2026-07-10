@@ -155,19 +155,24 @@ const CATEGORY_CONFIGS = {
 
 // ── 파싱 ─────────────────────────────────────────────────────────
 // rowOffset: 시트에서 실제 읽기 시작한 행번호 (1-based)
-function parseReturns(rows, rowOffset, category, cols) {
+// 카테고리로 미리 걸러내지 않고 전부 그룹에 담는다 (2026-07-10 변경) —
+// 신청하지 않은 상품이 같이 반품되면 그 행의 구분값이 다르게 매겨지는데,
+// 여기서 미리 걸러내면 그 사실 자체를 reconcile()이 알 수 없어서
+// "정상 처리"로 잘못 통과시키는 사고가 있었음. 각 행에 구분값을 같이
+// 담아서 reconcile() 쪽에서 카테고리 혼재 여부를 판단하게 한다.
+function parseReturns(rows, rowOffset, cols) {
   const groups = {};
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (safeGet(row, cols.doneDate)) continue;
-    if (safeGet(row, cols.category) !== category) continue;
     const orderNo = safeGet(row, cols.orderNo);
     if (!orderNo) continue;
     const item = safeGet(row, cols.item);
     const qtyRaw = safeGet(row, cols.realQty) || safeGet(row, cols.qty);
     const qty = parseInt(qtyRaw) || 0;
+    const rowCategory = safeGet(row, cols.category);
     if (!groups[orderNo]) groups[orderNo] = [];
-    groups[orderNo].push({ row: rowOffset + i, item, qty });
+    groups[orderNo].push({ row: rowOffset + i, item, qty, category: rowCategory });
   }
   return groups;
 }
@@ -205,11 +210,29 @@ function counterEqual(retRows, excRows) {
 }
 
 // ── 매칭 & 출고일 결정 ───────────────────────────────────────────
-function reconcile(returnsGroups, exchangeGroups, today, validPay) {
+function reconcile(returnsGroups, exchangeGroups, today, validPay, category) {
   const actions = [];
   const issues  = [];
 
-  for (const [orderNo, retRows] of Object.entries(returnsGroups)) {
+  for (const [orderNo, allRetRows] of Object.entries(returnsGroups)) {
+    // 이번 실행 대상 카테고리와 관련 없는 주문(전부 다른 구분값)은 건너뜀
+    if (!allRetRows.some(r => r.category === category)) continue;
+
+    // 같은 주문번호인데 구분값이 여러 개 섞여 있으면(예: 자사몰교환 5개 +
+    // 신청 안 한 반품 5개) 개수만 맞으면 통과시키던 예전 로직으로는 못
+    // 잡아냈던 케이스 — 사람이 확인해야 하는 이슈로 분리한다.
+    const categories = [...new Set(allRetRows.map(r => r.category))];
+    if (categories.length > 1) {
+      issues.push({
+        order_no: orderNo,
+        issue_type: '카테고리혼재',
+        description: `반품입고시트에 이 주문번호로 구분값이 여러 개 섞여 있습니다(${categories.join(', ')}) — 신청하지 않은 상품이 같이 반품됐을 수 있습니다.`,
+        return_rows: allRetRows.map(r => r.row),
+      });
+      continue;
+    }
+
+    const retRows = allRetRows;
     const excRows = exchangeGroups[orderNo];
 
     if (!excRows) {
@@ -323,10 +346,10 @@ export default async function handler(req, res) {
       sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${START_ROW}:Z`),
     ]);
 
-    const returnsGroups  = parseReturns(retRows, START_ROW, category, retCols);
+    const returnsGroups  = parseReturns(retRows, START_ROW, retCols);
     const exchangeGroups = parseExchanges(excRows, START_ROW, excCols);
 
-    const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today, config.validPay);
+    const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today, config.validPay, category);
 
     let applied = null;
     if (apply && actions.length > 0) {

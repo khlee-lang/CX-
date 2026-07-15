@@ -16,7 +16,6 @@ export interface ReturnizeSourceRow {
   검품내용물상태: string;
   훼손사유: string;
   수량: string | number;
-  주문자아이디?: string;
 }
 
 export type RowStatus = 'ok' | 'needsReview' | 'excluded';
@@ -28,7 +27,6 @@ export interface ReturnizeRow {
   전달일: string;
   구분: string;
   판매처: string;
-  주문자아이디: string;
   주문번호: string;
   성함: string;
   연락처: string;
@@ -110,7 +108,6 @@ export function transformReturnizeRows(sourceRows: ReturnizeSourceRow[], today: 
         전달일,
         구분: '',
         판매처: mapChannel(r.접수채널명),
-        주문자아이디: (r.주문자아이디 || '').trim(),
         주문번호: stripOrderSuffix(r.브랜드주문번호),
         성함: (r.고객명 || '').trim(),
         연락처: (r.연락처 || '').trim(),

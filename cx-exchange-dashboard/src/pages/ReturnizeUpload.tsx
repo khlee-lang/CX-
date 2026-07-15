@@ -31,7 +31,6 @@ function readSourceExcel(file: File): Promise<ReturnizeSourceRow[]> {
           검품내용물상태: String(r['검품 내용물 상태'] ?? ''),
           훼손사유: String(r['훼손 사유'] ?? ''),
           수량: r['수량'] ?? '',
-          주문자아이디: String(r['주문자 아이디'] ?? ''),
         }));
         resolve(rows);
       } catch (err) {

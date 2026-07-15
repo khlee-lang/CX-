@@ -125,8 +125,8 @@ export const ReturnizeUpload: React.FC = () => {
       <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl p-4 flex gap-3 text-sm text-indigo-700 dark:text-indigo-300">
         <Icon name="info" className="mt-0.5 shrink-0" />
         <div className="space-y-1">
-          <p>검품 제품 상태가 "제품 없음"인 행은 자동으로 제외됩니다.</p>
-          <p className="text-indigo-500 dark:text-indigo-400">옵션 형식이 "제품코드 | 색상 | 사이즈" 3파트가 아니면 "확인필요"로 분류되며, 직접 상품명/옵션명을 입력해야 반영할 수 있습니다.</p>
+          <p>검품 제품 상태가 "제품 없음" 또는 "타사 제품"인 행은 자동으로 제외됩니다.</p>
+          <p className="text-indigo-500 dark:text-indigo-400">옵션 형식이 "제품코드 | 색상 | 사이즈" 3파트 또는 "색상-사이즈" 형태가 아니면 "확인필요"로 분류되며, 직접 상품명/옵션명을 입력해야 반영할 수 있습니다.</p>
         </div>
       </div>
 

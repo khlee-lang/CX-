@@ -160,19 +160,23 @@ const CATEGORY_CONFIGS = {
 // 여기서 미리 걸러내면 그 사실 자체를 reconcile()이 알 수 없어서
 // "정상 처리"로 잘못 통과시키는 사고가 있었음. 각 행에 구분값을 같이
 // 담아서 reconcile() 쪽에서 카테고리 혼재 여부를 판단하게 한다.
+// done(완료 처리된) 행도 그룹에 포함시킨다 — 신청한 상품만 먼저 들어와 처리가
+// 끝난 뒤, 상관없는 반품 상품이 같은 주문번호로 나중에 들어오는 경우를 잡아내려면
+// "이미 끝난 행"의 존재도 알아야 하기 때문 (2026-07-15: 이 케이스를 못 잡아서
+// 조용히 넘어간 사고 이후 추가).
 function parseReturns(rows, rowOffset, cols) {
   const groups = {};
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    if (safeGet(row, cols.doneDate)) continue;
     const orderNo = safeGet(row, cols.orderNo);
     if (!orderNo) continue;
     const item = safeGet(row, cols.item);
     const qtyRaw = safeGet(row, cols.realQty) || safeGet(row, cols.qty);
     const qty = parseInt(qtyRaw) || 0;
     const rowCategory = safeGet(row, cols.category);
+    const done = !!safeGet(row, cols.doneDate);
     if (!groups[orderNo]) groups[orderNo] = [];
-    groups[orderNo].push({ row: rowOffset + i, item, qty, category: rowCategory });
+    groups[orderNo].push({ row: rowOffset + i, item, qty, category: rowCategory, done });
   }
   return groups;
 }
@@ -221,18 +225,25 @@ function reconcile(returnsGroups, exchangeGroups, today, validPay, category) {
     // 같은 주문번호인데 구분값이 여러 개 섞여 있으면(예: 자사몰교환 5개 +
     // 신청 안 한 반품 5개) 개수만 맞으면 통과시키던 예전 로직으로는 못
     // 잡아냈던 케이스 — 사람이 확인해야 하는 이슈로 분리한다.
+    // 완료(done) 처리된 행도 함께 봐야 한다: 신청 상품만 먼저 들어와 처리가
+    // 끝난 뒤 상관없는 반품 상품이 나중에 같은 주문번호로 들어오는 경우,
+    // 그 시점엔 미처리 행만 보면 섞임이 안 보여 조용히 지나가기 때문.
     const categories = [...new Set(allRetRows.map(r => r.category))];
     if (categories.length > 1) {
+      const alreadyDone = allRetRows.some(r => r.done);
       issues.push({
         order_no: orderNo,
         issue_type: '카테고리혼재',
-        description: `반품입고시트에 이 주문번호로 구분값이 여러 개 섞여 있습니다(${categories.join(', ')}) — 신청하지 않은 상품이 같이 반품됐을 수 있습니다.`,
+        description: alreadyDone
+          ? `이 주문번호는 이미 일부 처리 완료됐는데, 이후 구분값이 다른 반품 항목이 추가로 들어왔습니다(${categories.join(', ')}) — 신청하지 않은 상품이 나중에 같이 반품됐을 수 있습니다.`
+          : `반품입고시트에 이 주문번호로 구분값이 여러 개 섞여 있습니다(${categories.join(', ')}) — 신청하지 않은 상품이 같이 반품됐을 수 있습니다.`,
         return_rows: allRetRows.map(r => r.row),
       });
       continue;
     }
 
-    const retRows = allRetRows;
+    const retRows = allRetRows.filter(r => !r.done);
+    if (retRows.length === 0) continue; // 이미 전부 처리 완료된 주문
     const excRows = exchangeGroups[orderNo];
 
     if (!excRows) {

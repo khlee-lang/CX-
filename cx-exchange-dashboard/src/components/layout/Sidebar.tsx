@@ -46,14 +46,18 @@ export const Sidebar: React.FC = () => {
         </div>
 
         <div className="pt-4 mt-2 border-t border-slate-200/60">
-          <p className="px-3 mb-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">자동화</p>
-          <NavLink to="/reconcile" className={navLinkClasses}>
-            <Icon name="sync_alt" />
-            <span className="text-sm tracking-tight">반품-교환 연동</span>
+          <p className="px-3 mb-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">자동화 · 판토스</p>
+          <NavLink to="/pantos" className={navLinkClasses}>
+            <Icon name="local_shipping" />
+            <span className="text-sm tracking-tight">판토스 반품 처리</span>
           </NavLink>
-          <NavLink to="/returns-sheet-maintenance" className={navLinkClasses}>
-            <Icon name="build" />
-            <span className="text-sm tracking-tight">반품 시트 관리</span>
+        </div>
+
+        <div className="pt-4 mt-2 border-t border-slate-200/60">
+          <p className="px-3 mb-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">자동화 · 리터니즈</p>
+          <NavLink to="/returnize-upload" className={navLinkClasses}>
+            <Icon name="upload_file" />
+            <span className="text-sm tracking-tight">리터니즈 업로드</span>
           </NavLink>
         </div>
       </nav>

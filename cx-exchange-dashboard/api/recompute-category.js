@@ -117,7 +117,7 @@ function normalize(s) {
 // 예전과 같은 고정 위치(P열, 0-based 15)로 대체하고 경고를 남긴다.
 const AUTO_ID_FALLBACK_INDEX = 15;
 
-async function buildCategoryMap(jwt) {
+export async function buildCategoryMap(jwt) {
   const map = new Map();
   const warnings = [];
   for (const src of CATEGORY_SOURCES) {
@@ -139,6 +139,37 @@ async function buildCategoryMap(jwt) {
   return { map, warnings };
 }
 
+// 시트 하나에 대해 구분값을 재계산. 판토스_입고리스트는 1~2행이 헤더+안내행이라
+// 데이터가 3행부터 시작하고, 리터니즈는 안내행 없이 2행부터 바로 데이터라 시트별로
+// dataStartRow를 다르게 받는다.
+export async function recomputeForSheet(jwt, map, sheetName, dataStartRow, apply) {
+  const pendingHeader = await sheetsGet(jwt, RETURNS_SS_ID, `'${sheetName}'!1:1`);
+  const pendingCols = resolveColumns(pendingHeader[0], { arrivalCode: '입고코드번호', category: '구분' }, sheetName);
+  const arrivalLetter = indexToLetter(pendingCols.arrivalCode);
+  const categoryLetter = indexToLetter(pendingCols.category);
+
+  const tCol = await sheetsGet(jwt, RETURNS_SS_ID, `'${sheetName}'!${arrivalLetter}${dataStartRow}:${arrivalLetter}`);
+  const newE = tCol.map(row => {
+    const t = (row[0] || '').toString();
+    if (!t) return [''];
+    return [map.get(normalize(t)) || '반품'];
+  });
+
+  const distribution = {};
+  newE.forEach(([v]) => { distribution[v || '(빈값)'] = (distribution[v || '(빈값)'] || 0) + 1; });
+
+  let applied = false;
+  if (apply && newE.length > 0) {
+    const range = `'${sheetName}'!${categoryLetter}${dataStartRow}:${categoryLetter}${dataStartRow - 1 + newE.length}`;
+    await sheetsPut(jwt, RETURNS_SS_ID, range, newE);
+    applied = true;
+  }
+
+  return { rowCount: newE.length, distribution, applied };
+}
+
+// 이 엔드포인트("반품 시트 관리" 페이지의 "구분값 재계산" 버튼)는 판토스_입고리스트 전용이다.
+// 리터니즈는 별도 흐름(리터니즈 업로드 시 recomputeForSheet를 직접 호출)에서 자기 것만 계산한다.
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -148,30 +179,9 @@ export default async function handler(req, res) {
     const jwt = getJwt();
 
     const { map, warnings } = await buildCategoryMap(jwt);
+    const pantos = await recomputeForSheet(jwt, map, PENDING_SHEET, 3, apply);
 
-    const pendingHeader = await sheetsGet(jwt, RETURNS_SS_ID, `'${PENDING_SHEET}'!1:1`);
-    const pendingCols = resolveColumns(pendingHeader[0], { arrivalCode: '입고코드번호', category: '구분' }, PENDING_SHEET);
-    const arrivalLetter = indexToLetter(pendingCols.arrivalCode);
-    const categoryLetter = indexToLetter(pendingCols.category);
-
-    const tCol = await sheetsGet(jwt, RETURNS_SS_ID, `'${PENDING_SHEET}'!${arrivalLetter}3:${arrivalLetter}`);
-    const newE = tCol.map(row => {
-      const t = (row[0] || '').toString();
-      if (!t) return [''];
-      return [map.get(normalize(t)) || '반품'];
-    });
-
-    const distribution = {};
-    newE.forEach(([v]) => { distribution[v || '(빈값)'] = (distribution[v || '(빈값)'] || 0) + 1; });
-
-    let applied = false;
-    if (apply && newE.length > 0) {
-      const range = `'${PENDING_SHEET}'!${categoryLetter}3:${categoryLetter}${2 + newE.length}`;
-      await sheetsPut(jwt, RETURNS_SS_ID, range, newE);
-      applied = true;
-    }
-
-    res.json({ rowCount: newE.length, distribution, applied, warnings });
+    res.json({ rowCount: pantos.rowCount, distribution: pantos.distribution, applied: pantos.applied, warnings });
   } catch (err) {
     console.error('[recompute-category]', err);
     res.status(500).json({ error: err.message });

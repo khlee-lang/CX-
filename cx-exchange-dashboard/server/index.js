@@ -208,14 +208,17 @@ app.post('/api/reconcile', async (req, res) => {
   // 않은 상품이 같이 반품되면 그 행 구분값이 다르게 매겨지는데, 여기서
   // 미리 걸러내면 reconcile()이 그 사실을 알 수 없어 "정상 처리"로
   // 잘못 통과시키는 사고가 있었음.
+  // done(완료 처리된) 행도 그룹에 포함시킨다 — 신청한 상품만 먼저 들어와 처리가
+  // 끝난 뒤, 상관없는 반품 상품이 같은 주문번호로 나중에 들어오는 경우를 잡아내려면
+  // "이미 끝난 행"의 존재도 알아야 하기 때문 (2026-07-15: 이 케이스를 못 잡아서
+  // 조용히 넘어간 사고 이후 추가).
   function parseReturns(rows, rowOffset, cols) {
     const g = {};
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      if (sg(r,cols.doneDate)) continue;
       const o = sg(r,cols.orderNo); if (!o) continue;
       if (!g[o]) g[o] = [];
-      g[o].push({ row: rowOffset+i, item: sg(r,cols.item), qty: parseInt(sg(r,cols.realQty)||sg(r,cols.qty))||0, category: sg(r,cols.category) });
+      g[o].push({ row: rowOffset+i, item: sg(r,cols.item), qty: parseInt(sg(r,cols.realQty)||sg(r,cols.qty))||0, category: sg(r,cols.category), done: !!sg(r,cols.doneDate) });
     }
     return g;
   }
@@ -243,11 +246,15 @@ app.post('/api/reconcile', async (req, res) => {
 
       const categories = [...new Set(allRetRows.map(r=>r.category))];
       if (categories.length > 1) {
-        issues.push({order_no:o,issue_type:'카테고리혼재',description:`반품입고시트에 이 주문번호로 구분값이 여러 개 섞여 있습니다(${categories.join(', ')}) — 신청하지 않은 상품이 같이 반품됐을 수 있습니다.`,return_rows:allRetRows.map(r=>r.row)});
+        const alreadyDone = allRetRows.some(r=>r.done);
+        issues.push({order_no:o,issue_type:'카테고리혼재',description: alreadyDone
+          ? `이 주문번호는 이미 일부 처리 완료됐는데, 이후 구분값이 다른 반품 항목이 추가로 들어왔습니다(${categories.join(', ')}) — 신청하지 않은 상품이 나중에 같이 반품됐을 수 있습니다.`
+          : `반품입고시트에 이 주문번호로 구분값이 여러 개 섞여 있습니다(${categories.join(', ')}) — 신청하지 않은 상품이 같이 반품됐을 수 있습니다.`,return_rows:allRetRows.map(r=>r.row)});
         continue;
       }
 
-      const retRows = allRetRows;
+      const retRows = allRetRows.filter(r=>!r.done);
+      if (retRows.length === 0) continue; // 이미 전부 처리 완료된 주문
       const excRows = eg[o];
       if (!excRows) { issues.push({order_no:o,issue_type:'주문없음',description:'교환접수시트에 해당 주문번호가 없습니다.',return_rows:retRows.map(r=>r.row)}); continue; }
       if (!counterEqual(retRows,excRows)) { issues.push({order_no:o,issue_type:'상품불일치',description:'반품입고와 교환접수의 상품/옵션/수량이 일치하지 않습니다.',return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
@@ -298,6 +305,13 @@ app.post('/api/reconcile', async (req, res) => {
     console.error('[reconcile]', err);
     res.status(500).json({error: err.message});
   }
+});
+
+// 리터니즈 업로드는 api/upload-returnize.js(Vercel 서버리스 함수)를 그대로 재사용 —
+// ESM 모듈이라 동적 import로 불러와서 Express req/res에 그대로 위임한다.
+app.post('/api/upload-returnize', async (req, res) => {
+  const { default: handler } = await import('../api/upload-returnize.js');
+  return handler(req, res);
 });
 
 app.listen(port, () => {

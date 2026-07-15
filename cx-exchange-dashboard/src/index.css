@@ -11,7 +11,17 @@
   }
 }
 
+@keyframes indeterminate-bar {
+  0%   { left: -40%; width: 40%; }
+  50%  { left: 30%;  width: 55%; }
+  100% { left: 100%; width: 40%; }
+}
+
 @layer utilities {
+  .animate-indeterminate-bar {
+    animation: indeterminate-bar 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
   .material-symbols-outlined {
     font-variation-settings:
       'FILL' 0,

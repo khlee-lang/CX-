@@ -10,8 +10,8 @@ import { ExchangePerformance } from './pages/ExchangePerformance';
 import { LowStockAlerts } from './pages/LowStockAlerts';
 import { ProductDetail } from './pages/ProductDetail';
 import { ReportCenter } from './pages/ReportCenter';
-import { Reconcile } from './pages/Reconcile';
-import { ReturnsSheetMaintenance } from './pages/ReturnsSheetMaintenance';
+import { PantosOps } from './pages/PantosOps';
+import { ReturnizeUpload } from './pages/ReturnizeUpload';
 
 function App() {
   return (
@@ -28,8 +28,8 @@ function App() {
           <Route path="low-stock-alerts" element={<LowStockAlerts />} />
           <Route path="product-detail" element={<ProductDetail />} />
           <Route path="report-center" element={<ReportCenter />} />
-          <Route path="reconcile" element={<Reconcile />} />
-          <Route path="returns-sheet-maintenance" element={<ReturnsSheetMaintenance />} />
+          <Route path="pantos" element={<PantosOps />} />
+          <Route path="returnize-upload" element={<ReturnizeUpload />} />
         </Route>
       </Routes>
     </BrowserRouter>

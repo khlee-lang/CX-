@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Icon } from '../components/ui/Icon';
+import { ReconcileSection } from '../components/ReconcileSection';
 import { transformReturnizeRows, type ReturnizeRow, type ReturnizeSourceRow } from '../lib/returnizeTransform';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -389,6 +390,10 @@ export const ReturnizeUpload: React.FC = () => {
       )}
 
       <RecomputeSection />
+
+      <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+        <ReconcileSection source="리터니즈" />
+      </div>
     </div>
   );
 };

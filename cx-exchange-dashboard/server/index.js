@@ -150,7 +150,7 @@ function resolveColumns(headerRow, spec, sheetLabel) {
 
 // ── POST: 반품입고-교환 연동 ─────────────────────────────────────
 app.post('/api/reconcile', async (req, res) => {
-  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환' } = req.body || {};
+  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환', source = '판토스' } = req.body || {};
 
   const RETURNS_SS_ID  = '1B6UKmborJQCAKIrIBziAFMjKR0CfY8Jul1E_Rbs5C3Y';
   const EXCHANGE_SS_ID = '1cqLifjcihpHlAUN9ZcG19uJ9MhdkYcOxLzMDPcaBufg';
@@ -170,6 +170,14 @@ app.post('/api/reconcile', async (req, res) => {
 
   const RETURNS_HEADER_SPEC = { doneDate: '완료일', category: '구분', orderNo: '주문번호', item: '상품명/옵션명', qty: '수량', realQty: '실수량' };
   const EXCHANGE_HEADER_SPEC = { shipDate: '출고일', payMethod: '지불방법', orderNo: '주문번호', prevOpt: '교환 전 옵션', itemName: '상품명', newOpt: '교환 출고 옵션', qty: '수량' };
+
+  // 반품 물류 채널별 반품시트 설정 (api/reconcile.js와 동일) — 리터니즈는 2행부터, "수량" 열 없음
+  const RETURNS_SOURCES = {
+    판토스: { sheet: '판토스_입고리스트', startRow: 3, headerSpec: RETURNS_HEADER_SPEC },
+    리터니즈: { sheet: '리터니즈', startRow: 2, headerSpec: { doneDate: '완료일', category: '구분', orderNo: '주문번호', item: '상품명/옵션명', realQty: '실수량' } },
+  };
+  const srcConfig = RETURNS_SOURCES[source];
+  if (!srcConfig) return res.status(400).json({ error: `알 수 없는 source: ${source}` });
 
   const localJwt = new JWT({ email: creds.client_email, key: creds.private_key, scopes: SCOPES });
 
@@ -280,30 +288,31 @@ app.post('/api/reconcile', async (req, res) => {
   }
 
   try {
-    const START_ROW = 3;
+    const RETURNS_START_ROW = srcConfig.startRow; // 판토스=3, 리터니즈=2
+    const EXCHANGE_START_ROW = 3;                  // 교환접수시트는 기존 판토스 동작 그대로 3행부터
     const [retHeader, excHeader] = await Promise.all([
-      sheetsGet(RETURNS_SS_ID, `'판토스_입고리스트'!1:1`),
+      sheetsGet(RETURNS_SS_ID, `'${srcConfig.sheet}'!1:1`),
       sheetsGet(EXCHANGE_SS_ID, `'${config.exchangeSheet}'!1:1`),
     ]);
-    const retCols = resolveColumns(retHeader[0], RETURNS_HEADER_SPEC, '판토스_입고리스트');
+    const retCols = resolveColumns(retHeader[0], srcConfig.headerSpec, srcConfig.sheet);
     const excCols = resolveColumns(excHeader[0], EXCHANGE_HEADER_SPEC, config.exchangeSheet);
 
     const [retRows, excRows] = await Promise.all([
-      sheetsGet(RETURNS_SS_ID, `'판토스_입고리스트'!A${START_ROW}:Z`),
-      sheetsGet(EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${START_ROW}:Z`),
+      sheetsGet(RETURNS_SS_ID, `'${srcConfig.sheet}'!A${RETURNS_START_ROW}:Z`),
+      sheetsGet(EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${EXCHANGE_START_ROW}:Z`),
     ]);
-    const {actions,issues} = reconcile(parseReturns(retRows, START_ROW, retCols), parseExchanges(excRows, START_ROW, excCols), today, config.validPay, category);
+    const {actions,issues} = reconcile(parseReturns(retRows, RETURNS_START_ROW, retCols), parseExchanges(excRows, EXCHANGE_START_ROW, excCols), today, config.validPay, category);
     let applied = null;
     if (apply && actions.length > 0) {
       const excShipCol = excCols.shipDate + 1;
       const retDoneCol = retCols.doneDate + 1;
       const excU = actions.filter(a=>!a.skipShipWrite).flatMap(a=>a.exchange_rows.map(r=>({range:`'${config.exchangeSheet}'!${rowColToA1(r,excShipCol)}`,values:[[a.ship_date]]})));
-      const retU = actions.flatMap(a=>a.return_rows.map(r=>({range:`'판토스_입고리스트'!${rowColToA1(r,retDoneCol)}`,values:[[a.done_date]]})));
+      const retU = actions.flatMap(a=>a.return_rows.map(r=>({range:`'${srcConfig.sheet}'!${rowColToA1(r,retDoneCol)}`,values:[[a.done_date]]})));
       if (excU.length) await sheetsBatchUpdate(EXCHANGE_SS_ID, excU);
       if (retU.length) await sheetsBatchUpdate(RETURNS_SS_ID, retU);
       applied = {excUpdated:excU.length, retUpdated:retU.length};
     }
-    res.json({actions,issues,applied,today,category});
+    res.json({actions,issues,applied,today,category,source});
   } catch (err) {
     console.error('[reconcile]', err);
     res.status(500).json({error: err.message});

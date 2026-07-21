@@ -129,6 +129,24 @@ const RETURNS_HEADER_SPEC = {
   qty: '수량',
   realQty: '실수량',
 };
+
+// 반품 물류 채널별 반품시트 설정. 로직은 동일하고 "어느 반품시트를 읽고 쓰느냐"만
+// 다르다 — 판토스와 리터니즈는 시트 이름·데이터 시작행·열 구성이 다르다.
+// (리터니즈는 안내행 없이 2행부터 데이터, "수량" 열 없이 "실수량"만 있음)
+// 교환접수시트([자사몰]/[외부몰] 교환)는 두 채널 공통이라 CATEGORY_CONFIGS 그대로 사용.
+const RETURNS_SOURCES = {
+  판토스: {
+    sheet: '판토스_입고리스트',
+    startRow: 3, // 1행 헤더, 2행 안내행
+    headerSpec: RETURNS_HEADER_SPEC,
+  },
+  리터니즈: {
+    sheet: '리터니즈',
+    startRow: 2, // 1행 헤더, 2행부터 바로 데이터
+    // "수량" 열이 없으므로 스펙에서 제외 (parseReturns는 실수량 우선 → 수량 폴백이라 없어도 동작)
+    headerSpec: { doneDate: '완료일', category: '구분', orderNo: '주문번호', item: '상품명/옵션명', realQty: '실수량' },
+  },
+};
 const EXCHANGE_HEADER_SPEC = {
   shipDate: '출고일',
   payMethod: '지불방법',
@@ -317,12 +335,12 @@ function reconcile(returnsGroups, exchangeGroups, today, validPay, category) {
 }
 
 // ── 시트 반영 ────────────────────────────────────────────────────
-async function applyActions(jwt, actions, exchangeSheet, excShipCol, retDoneCol) {
+async function applyActions(jwt, actions, exchangeSheet, excShipCol, retDoneCol, returnsSheet) {
   const excUpdates = actions.filter(act => !act.skipShipWrite).flatMap(act =>
     act.exchange_rows.map(row => ({ range: `'${exchangeSheet}'!${rowColToA1(row, excShipCol)}`, values: [[act.ship_date]] }))
   );
   const retUpdates = actions.flatMap(act =>
-    act.return_rows.map(row => ({ range: `'판토스_입고리스트'!${rowColToA1(row, retDoneCol)}`, values: [[act.done_date]] }))
+    act.return_rows.map(row => ({ range: `'${returnsSheet}'!${rowColToA1(row, retDoneCol)}`, values: [[act.done_date]] }))
   );
 
   if (excUpdates.length) await sheetsBatchUpdate(jwt, EXCHANGE_SS_ID, excUpdates);
@@ -335,44 +353,47 @@ async function applyActions(jwt, actions, exchangeSheet, excShipCol, retDoneCol)
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환' } = req.body || {};
+  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환', source = '판토스' } = req.body || {};
 
   const config = CATEGORY_CONFIGS[category];
   if (!config) return res.status(400).json({ error: `알 수 없는 category: ${category}` });
+  const srcConfig = RETURNS_SOURCES[source];
+  if (!srcConfig) return res.status(400).json({ error: `알 수 없는 source: ${source}` });
 
   try {
     const jwt = getJwt();
 
     // 헤더 행을 먼저 읽어 열 위치를 확인 (항상 A열부터 절대 인덱스로 통일)
     const [retHeader, excHeader] = await Promise.all([
-      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!1:1`),
+      sheetsGet(jwt, RETURNS_SS_ID, `'${srcConfig.sheet}'!1:1`),
       sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!1:1`),
     ]);
-    const retCols = resolveColumns(retHeader[0], RETURNS_HEADER_SPEC, '판토스_입고리스트');
+    const retCols = resolveColumns(retHeader[0], srcConfig.headerSpec, srcConfig.sheet);
     const excCols = resolveColumns(excHeader[0], EXCHANGE_HEADER_SPEC, config.exchangeSheet);
 
-    // 반품입고시트(판토스_입고리스트)는 완료 건을 수동으로 주기적으로
-    // 히스토리 시트로 이관해 작게(미처리 건만) 유지하므로, 전체를 그냥
-    // 한 번에 읽는다. (예전엔 E열 거대 수식 때문에 청크로 나눠 읽어야
-    // 했지만, 그 수식은 코드로 대체되어 더 이상 문제가 되지 않음 —
-    // 업데이트기록.md 2026-07-06 참고)
-    const START_ROW = 3;
+    // 반품시트(판토스_입고리스트/리터니즈)는 완료 건을 주기적으로 히스토리로
+    // 이관해 작게 유지하므로 전체를 한 번에 읽는다. 데이터 시작행은 시트마다 다름
+    // (판토스=3행, 리터니즈=2행). 교환접수시트는 두 채널 공통이고 2행부터
+    // 데이터지만, 기존 판토스 동작을 그대로 보존하기 위해 3행부터 읽는다
+    // (2행의 오래된 데이터 1건은 최신 반품과 매칭될 일이 없어 무해).
+    const RETURNS_START_ROW = srcConfig.startRow;
+    const EXCHANGE_START_ROW = 3;
     const [retRows, excRows] = await Promise.all([
-      sheetsGet(jwt, RETURNS_SS_ID, `'판토스_입고리스트'!A${START_ROW}:Z`),
-      sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${START_ROW}:Z`),
+      sheetsGet(jwt, RETURNS_SS_ID, `'${srcConfig.sheet}'!A${RETURNS_START_ROW}:Z`),
+      sheetsGet(jwt, EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${EXCHANGE_START_ROW}:Z`),
     ]);
 
-    const returnsGroups  = parseReturns(retRows, START_ROW, retCols);
-    const exchangeGroups = parseExchanges(excRows, START_ROW, excCols);
+    const returnsGroups  = parseReturns(retRows, RETURNS_START_ROW, retCols);
+    const exchangeGroups = parseExchanges(excRows, EXCHANGE_START_ROW, excCols);
 
     const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today, config.validPay, category);
 
     let applied = null;
     if (apply && actions.length > 0) {
-      applied = await applyActions(jwt, actions, config.exchangeSheet, excCols.shipDate + 1, retCols.doneDate + 1);
+      applied = await applyActions(jwt, actions, config.exchangeSheet, excCols.shipDate + 1, retCols.doneDate + 1, srcConfig.sheet);
     }
 
-    res.json({ actions, issues, applied, today, category });
+    res.json({ actions, issues, applied, today, category, source });
   } catch (err) {
     console.error('[reconcile]', err);
     res.status(500).json({ error: err.message });

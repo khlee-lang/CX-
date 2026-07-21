@@ -244,6 +244,9 @@ app.post('/api/reconcile', async (req, res) => {
     for (const [o, allRetRows] of Object.entries(rg)) {
       if (!allRetRows.some(r=>r.category===category)) continue;
 
+      // 이 주문의 반품 행이 전부 이미 완료 처리됐다면 더 확인할 게 없다.
+      if (allRetRows.every(r=>r.done)) continue;
+
       const categories = [...new Set(allRetRows.map(r=>r.category))];
       if (categories.length > 1) {
         const alreadyDone = allRetRows.some(r=>r.done);
@@ -311,6 +314,12 @@ app.post('/api/reconcile', async (req, res) => {
 // ESM 모듈이라 동적 import로 불러와서 Express req/res에 그대로 위임한다.
 app.post('/api/upload-returnize', async (req, res) => {
   const { default: handler } = await import('../api/upload-returnize.js');
+  return handler(req, res);
+});
+
+// 리터니즈 구분값 재계산도 마찬가지로 api/recompute-returnize.js를 그대로 재사용.
+app.post('/api/recompute-returnize', async (req, res) => {
+  const { default: handler } = await import('../api/recompute-returnize.js');
   return handler(req, res);
 });
 

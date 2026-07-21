@@ -222,6 +222,11 @@ function reconcile(returnsGroups, exchangeGroups, today, validPay, category) {
     // 이번 실행 대상 카테고리와 관련 없는 주문(전부 다른 구분값)은 건너뜀
     if (!allRetRows.some(r => r.category === category)) continue;
 
+    // 이 주문의 반품 행이 전부(자사몰교환분+상관없는 반품분 포함) 이미
+    // 완료 처리됐다면 더 확인할 게 없다 — 아래 카테고리혼재 체크보다 먼저
+    // 걸러야, "이미 다 끝난 주문"이 계속 확인필요 이슈로 남는 걸 막을 수 있다.
+    if (allRetRows.every(r => r.done)) continue;
+
     // 같은 주문번호인데 구분값이 여러 개 섞여 있으면(예: 자사몰교환 5개 +
     // 신청 안 한 반품 5개) 개수만 맞으면 통과시키던 예전 로직으로는 못
     // 잡아냈던 케이스 — 사람이 확인해야 하는 이슈로 분리한다.

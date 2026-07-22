@@ -76,15 +76,26 @@ const RecomputeSection: React.FC = () => {
         {result && result.rowCount > 0 && (['preview', 'done', 'applying'] as RecomputeStatus[]).includes(status) && (
           <button
             onClick={() => run(true)}
-            disabled={status === 'done'}
+            disabled={status === 'done' || status === 'applying'}
             className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm disabled:opacity-40 transition-colors"
           >
             {status === 'done'
               ? <><Icon name="check_circle" className="text-base" /> 반영 완료</>
-              : <><Icon name="upload" className="text-base" /> 실제 반영 ({result.rowCount}행)</>}
+              : status === 'applying'
+                ? <><Icon name="sync" className="animate-spin text-base" /> 반영 중...</>
+                : <><Icon name="upload" className="text-base" /> 실제 반영 ({result.rowCount}행)</>}
           </button>
         )}
       </div>
+
+      {status === 'applying' && (
+        <div className="max-w-sm">
+          <div className="relative h-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 overflow-hidden">
+            <div className="absolute top-0 h-full rounded-full bg-emerald-500 animate-indeterminate-bar" />
+          </div>
+          <p className="text-xs text-slate-400 mt-1.5">구분값 재계산 반영 중입니다...</p>
+        </div>
+      )}
 
       {status === 'error' && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm flex gap-2">
@@ -181,6 +192,7 @@ export const ReturnizeUpload: React.FC = () => {
 
   const allReviewFilled = needsReviewIndexes.every(i => (reviewEdits[i] || '').trim().length > 0);
   const okCount = rows.filter(r => r.status === 'ok').length;
+  const optionMissingCount = rows.filter(r => r.status === 'ok' && r.optionMissing).length;
 
   const submit = async () => {
     if (!allReviewFilled) return;
@@ -267,6 +279,13 @@ export const ReturnizeUpload: React.FC = () => {
             </div>
           </div>
 
+          {optionMissingCount > 0 && (
+            <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-900/40 rounded-xl p-4 flex gap-3 text-sm text-orange-700 dark:text-orange-300">
+              <Icon name="warning" className="mt-0.5 shrink-0" />
+              <span>옵션값이 비어있습니다. 리터니즈한테 확인요청해주세요! ({optionMissingCount}건 — 아래 표에서 확인)</span>
+            </div>
+          )}
+
           <div>
             <button
               onClick={submit}
@@ -342,11 +361,21 @@ export const ReturnizeUpload: React.FC = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {rows.filter(r => r.status === 'ok').map((r, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                      <tr key={idx} className={`hover:bg-slate-50 dark:hover:bg-slate-800/50 ${r.optionMissing ? 'bg-orange-50/60 dark:bg-orange-900/10' : ''}`}>
                         <td className="px-4 py-2.5 font-mono text-xs text-slate-800 dark:text-slate-200">{r.주문번호}</td>
                         <td className="px-4 py-2.5 text-xs">{r.성함}</td>
                         <td className="px-4 py-2.5 text-xs">{r.판매처}</td>
-                        <td className="px-4 py-2.5 text-xs">{r.상품명옵션명}</td>
+                        <td className="px-4 py-2.5 text-xs">
+                          <span className="inline-flex items-center gap-1">
+                            {r.상품명옵션명}
+                            {r.optionMissing && (
+                              <span title="옵션값이 비어있습니다. 리터니즈한테 확인요청해주세요!" className="inline-flex items-center gap-0.5 text-orange-600 dark:text-orange-400">
+                                <Icon name="warning" className="text-sm" />
+                                <span className="text-[10px] font-semibold">옵션없음</span>
+                              </span>
+                            )}
+                          </span>
+                        </td>
                         <td className="px-4 py-2.5 text-xs">{r.실수량}</td>
                       </tr>
                     ))}

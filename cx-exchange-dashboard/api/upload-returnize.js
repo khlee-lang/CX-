@@ -108,6 +108,79 @@ async function sheetsPut(jwt, ssId, range, values) {
   });
 }
 
+async function sheetsGetMetadata(jwt, ssId, fields) {
+  return withRetry(async () => {
+    const { token } = await getAccessTokenWithTimeout(jwt);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}?fields=${encodeURIComponent(fields)}`;
+    const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Sheets 메타데이터 조회 오류');
+    return data;
+  });
+}
+
+async function sheetsBatchUpdate(jwt, ssId, requests) {
+  return withRetry(async () => {
+    const { token } = await getAccessTokenWithTimeout(jwt);
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${ssId}:batchUpdate`;
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || 'Sheets batchUpdate 오류');
+    return data;
+  });
+}
+
+// 업로드할 행 수가 시트의 실제 그리드 크기(물리적 행 개수)를 넘어서면
+// values.update(PUT)이 "Range exceeds grid limits" 오류를 낸다. 쓰기 전에
+// 필요한 만큼(+여유분) 그리드 행 수를 늘리고, 그리드 끝까지 걸려있던 조건부서식
+// (C열 구분값 색칠, L열 "훼손" 색칠 등)도 새 그리드 끝까지 같이 늘려서
+// 새로 추가되는 행에도 서식이 그대로 적용되게 한다.
+const GRID_GROWTH_BUFFER = 500;
+
+async function ensureGridCapacity(jwt, ssId, sheetName, requiredLastRow) {
+  const meta = await sheetsGetMetadata(jwt, ssId, 'sheets(properties,conditionalFormats)');
+  const sheet = meta.sheets?.find(s => s.properties?.title === sheetName);
+  if (!sheet) throw new Error(`'${sheetName}' 시트를 찾을 수 없습니다.`);
+
+  const sheetId = sheet.properties.sheetId;
+  const currentRowCount = sheet.properties.gridProperties?.rowCount ?? 0;
+  if (requiredLastRow <= currentRowCount) return;
+
+  const newRowCount = requiredLastRow + GRID_GROWTH_BUFFER;
+  const requests = [
+    {
+      updateSheetProperties: {
+        properties: { sheetId, gridProperties: { rowCount: newRowCount } },
+        fields: 'gridProperties.rowCount',
+      },
+    },
+  ];
+
+  (sheet.conditionalFormats || []).forEach((cf, index) => {
+    const extendedRanges = cf.ranges.map(r => (
+      r.sheetId === sheetId && r.endRowIndex === currentRowCount
+        ? { ...r, endRowIndex: newRowCount }
+        : r
+    ));
+    const changed = extendedRanges.some((r, i) => r.endRowIndex !== cf.ranges[i].endRowIndex);
+    if (changed) {
+      requests.push({
+        updateConditionalFormatRule: {
+          sheetId,
+          index,
+          rule: { ...cf, ranges: extendedRanges },
+        },
+      });
+    }
+  });
+
+  await sheetsBatchUpdate(jwt, ssId, requests);
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -142,8 +215,11 @@ export default async function handler(req, res) {
       return arr;
     });
 
+    const lastRow = startRow + values.length - 1;
+    await ensureGridCapacity(jwt, RETURNS_SS_ID, RETURNIZE_SHEET, lastRow);
+
     const lastColLetter = indexToLetter(colCount - 1);
-    const range = `'${RETURNIZE_SHEET}'!A${startRow}:${lastColLetter}${startRow + values.length - 1}`;
+    const range = `'${RETURNIZE_SHEET}'!A${startRow}:${lastColLetter}${lastRow}`;
     await sheetsPut(jwt, RETURNS_SS_ID, range, values);
 
     // 새로 넣은 행들의 '구분'(자사몰교환/외부몰교환/불량교환/반품)을 바로 채운다 —

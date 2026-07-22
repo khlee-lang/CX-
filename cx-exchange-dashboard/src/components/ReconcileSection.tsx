@@ -134,15 +134,26 @@ export const ReconcileSection: React.FC<{ source?: ReconcileSource }> = ({ sourc
         {result && result.actions.length > 0 && (['preview', 'done', 'applying'] as Status[]).includes(status) && (
           <button
             onClick={() => run(true)}
-            disabled={status === 'done'}
+            disabled={status === 'done' || status === 'applying'}
             className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm disabled:opacity-40 transition-colors"
           >
             {status === 'done'
               ? <><Icon name="check_circle" className="text-base" /> 반영 완료</>
-              : <><Icon name="upload" className="text-base" /> 시트에 반영 ({result.actions.length}건)</>}
+              : status === 'applying'
+                ? <><Icon name="sync" className="animate-spin text-base" /> 반영 중...</>
+                : <><Icon name="upload" className="text-base" /> 시트에 반영 ({result.actions.length}건)</>}
           </button>
         )}
       </div>
+
+      {status === 'applying' && (
+        <div className="max-w-sm">
+          <div className="relative h-1.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 overflow-hidden">
+            <div className="absolute top-0 h-full rounded-full bg-emerald-500 animate-indeterminate-bar" />
+          </div>
+          <p className="text-xs text-slate-400 mt-1.5">시트에 반영 중입니다...</p>
+        </div>
+      )}
 
       {status === 'error' && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm flex gap-2">

@@ -42,6 +42,8 @@ export interface ReturnizeRow {
   원본상품명: string;
   원본옵션: string;
   excludeReason?: string;
+  // 옵션 칸이 비어있어 상품명만으로 진행된 행(자동 변환은 되지만 리터니즈 확인 요청 필요)
+  optionMissing: boolean;
 }
 
 const CHANNEL_MAP: Record<string, string> = {
@@ -60,14 +62,40 @@ export function stripOrderSuffix(brandOrderNo: string): string {
   return (brandOrderNo || '').trim().replace(/_\d+$/, '');
 }
 
-// 옵션 문자열 형태 두 가지를 자동 조합 대상으로 인정한다:
+// 옛날 상품명으로 들어오는 것을 현재 판매명으로 교정. "상품명, Option:..." 형태로
+// 옵션이 상품명에 붙어서 들어오는 행에 한해서만 적용한다(아래 buildItemOption 참고).
+const PRODUCT_NAME_MAP: Record<string, string> = {
+  '티셔츠 브라 라이트': '티셔츠 브라 라이트 2.0',
+};
+
+function normalizeProductName(name: string): string {
+  return PRODUCT_NAME_MAP[name] || name;
+}
+
+// 옵션 문자열 형태 세 가지를 자동 조합 대상으로 인정한다:
 // 1) "제품코드 | 색상 | 사이즈" 정확히 3파트 (파이프 구분)
-// 2) 파이프 없이 "색상-사이즈" 형태 (예: "라이트블루- S", "블랙-S")
-// 그 외 형태(옵션 없음, 파트 개수가 안 맞음 등)는 null을 반환해서 "확인필요"로 분류하게 한다.
+// 2) "제품코드 / 색상 / 사이즈" 정확히 3파트 (슬래시 구분, 반품업체 표기가 간헐적으로 이 형태로 옴)
+// 3) 파이프·슬래시 둘 다 없이 "색상-사이즈" 형태 (예: "라이트블루- S", "블랙-S")
+// 옵션 칸이 아예 비어있으면 옵션 없이 상품명만으로 진행한다(대괄호 없이).
+// 그 외 형태(파트 개수가 안 맞음 등)는 null을 반환해서 "확인필요"로 분류하게 한다.
 export function buildItemOption(productName: string, option: string): string | null {
-  const raw = (option || '').trim();
-  if (!raw) return null;
   const name = (productName || '').trim();
+
+  // "티셔츠 브라 라이트, Option:뮤트블루^85C" 처럼 상품명에 옵션이 캐럿(^)
+  // 형태로 붙어서 들어오는 경우. 이 패턴일 때만 상품명 교정도 함께 적용한다.
+  const optionSuffixMatch = name.match(/^(.+?),\s*Option:(.+)$/);
+  if (optionSuffixMatch) {
+    const baseName = normalizeProductName(optionSuffixMatch[1].trim());
+    const caretParts = optionSuffixMatch[2].trim().split('^').map(p => p.trim()).filter(p => p.length > 0);
+    if (caretParts.length === 2) {
+      const [color, size] = caretParts;
+      return `${baseName}[${color}-${size}]`;
+    }
+    return null;
+  }
+
+  const raw = (option || '').trim();
+  if (!raw) return name || null;
 
   const pipeParts = raw.split('|').map(p => p.trim()).filter(p => p.length > 0);
   if (pipeParts.length === 3) {
@@ -76,14 +104,29 @@ export function buildItemOption(productName: string, option: string): string | n
   }
 
   if (!raw.includes('|')) {
-    const dashParts = raw.split('-').map(p => p.trim()).filter(p => p.length > 0);
-    if (dashParts.length === 2) {
-      const [color, size] = dashParts;
+    const slashParts = raw.split('/').map(p => p.trim()).filter(p => p.length > 0);
+    if (slashParts.length === 3) {
+      const [, color, size] = slashParts;
       return `${name}[${color}-${size}]`;
+    }
+
+    if (!raw.includes('/')) {
+      const dashParts = raw.split('-').map(p => p.trim()).filter(p => p.length > 0);
+      if (dashParts.length === 2) {
+        const [color, size] = dashParts;
+        return `${name}[${color}-${size}]`;
+      }
     }
   }
 
   return null;
+}
+
+// 옵션 칸이 비어있어(상품명, Option:.. 접미사도 없이) 상품명만으로 조합된 경우인지 판단.
+function isOptionMissing(productName: string, option: string): boolean {
+  const name = (productName || '').trim();
+  if (/^(.+?),\s*Option:(.+)$/.test(name)) return false;
+  return !(option || '').trim();
 }
 
 // 검품 제품 상태가 이 값이면 반품 자체가 잘못 온 것(제품 없음)이거나 아예 다른
@@ -121,6 +164,7 @@ export function transformReturnizeRows(sourceRows: ReturnizeSourceRow[], today: 
         반송장번호: (r.송장번호 || '').trim(),
         원본상품명: (r.상품명 || '').trim(),
         원본옵션: (r.옵션 || '').trim(),
+        optionMissing: combined !== null && isOptionMissing(r.상품명, r.옵션),
       };
     });
 }

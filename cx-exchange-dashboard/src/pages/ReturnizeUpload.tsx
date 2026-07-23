@@ -8,7 +8,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 type Status = 'idle' | 'parsed' | 'applying' | 'done' | 'error';
 
-// ── 구분값(C열) 재계산 ────────────────────────────────────────────
+// ── 구분값 재계산 ────────────────────────────────────────────
 // 리터니즈 업로드 시 자동으로 한 번 계산되지만, 업로드 없이(예: 교환접수시트
 // 쪽 데이터가 나중에 바뀐 경우) 다시 계산하고 싶을 때를 위한 독립 버튼.
 type RecomputeStatus = 'idle' | 'loading' | 'preview' | 'applying' | 'done' | 'error';
@@ -55,7 +55,7 @@ const RecomputeSection: React.FC = () => {
 
   return (
     <section className="space-y-4 border-t border-slate-200 dark:border-slate-700 pt-6">
-      <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">구분값(C열) 재계산</h2>
+      <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">구분값 재계산</h2>
 
       <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-xl p-4 flex gap-3 text-sm text-indigo-700 dark:text-indigo-300">
         <Icon name="info" className="mt-0.5 shrink-0" />
@@ -408,7 +408,7 @@ export const ReturnizeUpload: React.FC = () => {
           )}
           {categoryDistribution === null && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-700 text-sm text-center">
-              구분값 자동 재계산에 실패했습니다 — 아래 "구분값(C열) 재계산"에서 수동으로 다시 실행해주세요.
+              구분값 자동 재계산에 실패했습니다 — 아래 "구분값 재계산"에서 수동으로 다시 실행해주세요.
             </div>
           )}
 

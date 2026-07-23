@@ -137,7 +137,7 @@ async function sheetsBatchUpdate(jwt, ssId, requests) {
 // 업로드할 행 수가 시트의 실제 그리드 크기(물리적 행 개수)를 넘어서면
 // values.update(PUT)이 "Range exceeds grid limits" 오류를 낸다. 쓰기 전에
 // 필요한 만큼(+여유분) 그리드 행 수를 늘리고, 그리드 끝까지 걸려있던 조건부서식
-// (C열 구분값 색칠, L열 "훼손" 색칠 등)도 새 그리드 끝까지 같이 늘려서
+// (구분값 색칠, "훼손" 색칠 등)도 새 그리드 끝까지 같이 늘려서
 // 새로 추가되는 행에도 서식이 그대로 적용되게 한다.
 const GRID_GROWTH_BUFFER = 500;
 

@@ -1,4 +1,4 @@
-// 리터니즈 워크시트 구분열(C열) 재계산 API — 판토스_입고리스트용 recompute-category.js와
+// 리터니즈 워크시트 구분열 재계산 API — 판토스_입고리스트용 recompute-category.js와
 // 판단 로직은 동일하지만(buildCategoryMap/recomputeForSheet 재사용), 리터니즈 시트만
 // 독립적으로 다시 계산할 수 있도록 별도 엔드포인트로 분리했다.
 // 원래는 리터니즈 업로드 시에만 자동 실행됐는데, 업로드 없이도(예: 교환접수시트

@@ -54,11 +54,23 @@ const SOURCE_SHEET_LABEL: Record<ReconcileSource, string> = {
   '리터니즈': '리터니즈 시트',
 };
 
+// 자동계산 출고일이 "다음 영업일"인 건만 YYYY-MM-DD 형태다.
+// (입고MMDD·이미출고됨(...)은 형태가 달라 여기 안 걸린다 → 날짜 변경 대상 아님)
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 export const ReconcileSection: React.FC<{ source?: ReconcileSource }> = ({ source = '판토스' }) => {
   const [category, setCategory] = useState<Category>('자사몰교환');
   const [status, setStatus]   = useState<Status>('idle');
   const [result, setResult]   = useState<ReconcileResult | null>(null);
   const [error, setError]     = useState<string>('');
+  // 출고일 수동지정: null이면 자동계산 그대로. 값이 있으면 YYYY-MM-DD 출고일 건에만 적용.
+  const [shipDateOverride, setShipDateOverride] = useState<string | null>(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  const resetOverride = () => {
+    setShipDateOverride(null);
+    setShowDatePicker(false);
+  };
 
   const switchCategory = (cat: Category) => {
     if (cat === category) return;
@@ -66,16 +78,18 @@ export const ReconcileSection: React.FC<{ source?: ReconcileSource }> = ({ sourc
     setStatus('idle');
     setResult(null);
     setError('');
+    resetOverride();
   };
 
   const run = async (apply: boolean) => {
     setStatus(apply ? 'applying' : 'loading');
     setError('');
+    if (!apply) resetOverride(); // 새 미리보기는 항상 자동계산 출고일부터 시작
     try {
       const res = await fetch(`${API_BASE_URL}/reconcile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apply, category, source }),
+        body: JSON.stringify({ apply, category, source, shipDateOverride: apply ? shipDateOverride : null }),
       });
       const text = await res.text();
       let data: any;
@@ -90,6 +104,18 @@ export const ReconcileSection: React.FC<{ source?: ReconcileSource }> = ({ sourc
   };
 
   const today = new Date().toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
+
+  // 출고일이 YYYY-MM-DD 형태인 건 = 날짜 변경 대상. 하나라도 있어야 "날짜 변경하기" 노출.
+  const ymdActions = result?.actions.filter(a => YMD_RE.test(a.ship_date)) ?? [];
+  const canChangeShipDate = ymdActions.length > 0;
+  const defaultShipDate = ymdActions[0]?.ship_date ?? '';
+  // 표시용 리스트 — 수동지정 날짜가 있으면 YYYY-MM-DD 건의 출고일·사유를 그 날짜 기준으로 교체.
+  // (백엔드도 apply 시 사유를 "출고일 수동지정(...)"으로 다시 계산하므로 미리보기와 일치시킨다.)
+  const displayActions = (result?.actions ?? []).map(a =>
+    shipDateOverride && YMD_RE.test(a.ship_date)
+      ? { ...a, ship_date: shipDateOverride, reason: a.reason.replace(/→ 다음출고일$/, `→ 출고일 수동지정(${shipDateOverride})`) }
+      : a
+  );
 
   return (
     <section className="space-y-4">
@@ -144,7 +170,49 @@ export const ReconcileSection: React.FC<{ source?: ReconcileSource }> = ({ sourc
                 : <><Icon name="upload" className="text-base" /> 시트에 반영 ({result.actions.length}건)</>}
           </button>
         )}
+
+        {/* 출고일이 YYYY-MM-DD 형태인 건이 하나라도 있을 때만 노출 */}
+        {canChangeShipDate && (['preview'] as Status[]).includes(status) && (
+          <button
+            onClick={() => setShowDatePicker(v => !v)}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-semibold text-sm border transition-colors ${
+              shipDateOverride
+                ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
+                : 'border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Icon name="calendar_today" className="text-base" />
+            {shipDateOverride ? `출고일: ${shipDateOverride}` : '출고일 날짜 변경하기'}
+          </button>
+        )}
       </div>
+
+      {/* 출고일 날짜 선택 패널 */}
+      {canChangeShipDate && showDatePicker && status === 'preview' && (
+        <div className="rounded-xl border border-blue-200 dark:border-blue-900/40 bg-blue-50/50 dark:bg-blue-900/10 p-4 space-y-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-sm font-semibold text-slate-700 dark:text-slate-300">출고일 지정</label>
+            <input
+              type="date"
+              value={shipDateOverride ?? defaultShipDate}
+              onChange={(e) => setShipDateOverride(e.target.value || null)}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800 text-sm"
+            />
+            {shipDateOverride && (
+              <button
+                onClick={resetOverride}
+                className="text-xs text-slate-500 underline hover:text-slate-700 dark:hover:text-slate-300"
+              >
+                자동계산으로 되돌리기
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            YYYY-MM-DD 형태인 <span className="font-semibold text-blue-600 dark:text-blue-400">{ymdActions.length}건</span>의 출고일만 이 날짜로 바뀝니다.
+            입고대기(입고MMDD)·이미출고됨 건과 확인완료일은 그대로 유지됩니다.
+          </p>
+        </div>
+      )}
 
       {status === 'applying' && (
         <div className="max-w-sm">
@@ -195,7 +263,7 @@ export const ReconcileSection: React.FC<{ source?: ReconcileSource }> = ({ sourc
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {result.actions.map((a) => (
+                    {displayActions.map((a) => (
                       <tr key={a.order_no} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                         <td className="px-4 py-2.5 font-mono text-xs text-slate-800 dark:text-slate-200">{a.order_no}</td>
                         <td className="px-4 py-2.5">

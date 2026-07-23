@@ -231,8 +231,14 @@ function counterEqual(retRows, excRows) {
   return kR.every((k, i) => k === kE[i] && cntR[k] === cntE[k]);
 }
 
+// 출고일 수동 지정값 형식 검사 (YYYY-MM-DD)
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 // ── 매칭 & 출고일 결정 ───────────────────────────────────────────
-function reconcile(returnsGroups, exchangeGroups, today, validPay, category) {
+// shipDateOverride: 사용자가 "출고일 날짜 변경하기"로 고른 YYYY-MM-DD 값(선택).
+// 설정 시, 자동계산 결과가 "다음 영업일(YYYY-MM-DD)"인 건에만 이 날짜를 대신 쓴다.
+// 입고MMDD(입고 대기)·이미출고됨(선출고) 건은 의미가 달라 건드리지 않는다.
+function reconcile(returnsGroups, exchangeGroups, today, validPay, category, shipDateOverride) {
   const actions = [];
   const issues  = [];
 
@@ -309,8 +315,14 @@ function reconcile(returnsGroups, exchangeGroups, today, validPay, category) {
       reason = '지불방법=입금요청 → 입고MMDD';
     } else if (validPay.has(pay)) {
       if (excRows.every(r => r.newOpt)) {
-        shipDate = nextShippingDate(today);
-        reason = `지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`;
+        // 다음 영업일(YYYY-MM-DD) 케이스 — 사용자가 출고일을 직접 골랐다면 그 날짜로 대체.
+        if (shipDateOverride) {
+          shipDate = shipDateOverride;
+          reason = `지불방법='${pay}', 출고옵션 모두 채워짐 → 출고일 수동지정(${shipDateOverride})`;
+        } else {
+          shipDate = nextShippingDate(today);
+          reason = `지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`;
+        }
       } else {
         shipDate = arrivalTag(today);
         reason = `지불방법='${pay}', 출고옵션 일부 비어있음 → 입고MMDD`;
@@ -353,12 +365,15 @@ async function applyActions(jwt, actions, exchangeSheet, excShipCol, retDoneCol,
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환', source = '판토스' } = req.body || {};
+  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환', source = '판토스', shipDateOverride = null } = req.body || {};
 
   const config = CATEGORY_CONFIGS[category];
   if (!config) return res.status(400).json({ error: `알 수 없는 category: ${category}` });
   const srcConfig = RETURNS_SOURCES[source];
   if (!srcConfig) return res.status(400).json({ error: `알 수 없는 source: ${source}` });
+  if (shipDateOverride != null && !YMD_RE.test(shipDateOverride)) {
+    return res.status(400).json({ error: `출고일 형식이 올바르지 않습니다(YYYY-MM-DD): ${shipDateOverride}` });
+  }
 
   try {
     const jwt = getJwt();
@@ -386,7 +401,7 @@ export default async function handler(req, res) {
     const returnsGroups  = parseReturns(retRows, RETURNS_START_ROW, retCols);
     const exchangeGroups = parseExchanges(excRows, EXCHANGE_START_ROW, excCols);
 
-    const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today, config.validPay, category);
+    const { actions, issues } = reconcile(returnsGroups, exchangeGroups, today, config.validPay, category, shipDateOverride);
 
     let applied = null;
     if (apply && actions.length > 0) {

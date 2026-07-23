@@ -150,7 +150,11 @@ function resolveColumns(headerRow, spec, sheetLabel) {
 
 // ── POST: 반품입고-교환 연동 ─────────────────────────────────────
 app.post('/api/reconcile', async (req, res) => {
-  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환', source = '판토스' } = req.body || {};
+  const { apply = false, today = new Date().toISOString().slice(0, 10), category = '자사몰교환', source = '판토스', shipDateOverride = null } = req.body || {};
+  const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+  if (shipDateOverride != null && !YMD_RE.test(shipDateOverride)) {
+    return res.status(400).json({ error: `출고일 형식이 올바르지 않습니다(YYYY-MM-DD): ${shipDateOverride}` });
+  }
 
   const RETURNS_SS_ID  = '1B6UKmborJQCAKIrIBziAFMjKR0CfY8Jul1E_Rbs5C3Y';
   const EXCHANGE_SS_ID = '1cqLifjcihpHlAUN9ZcG19uJ9MhdkYcOxLzMDPcaBufg';
@@ -247,7 +251,7 @@ app.post('/api/reconcile', async (req, res) => {
     if (kR.length!==kE.length) return false;
     return kR.every((k,i)=>k===kE[i]&&cR[k]===cE[k]);
   }
-  function reconcile(rg, eg, t, validPay, category) {
+  function reconcile(rg, eg, t, validPay, category, shipDateOverride) {
     const actions=[], issues=[];
     for (const [o, allRetRows] of Object.entries(rg)) {
       if (!allRetRows.some(r=>r.category===category)) continue;
@@ -280,7 +284,7 @@ app.post('/api/reconcile', async (req, res) => {
       if (pays.size>1) { issues.push({order_no:o,issue_type:'지불방법혼재',description:`지불방법이 여럿: ${[...pays].join(', ')}`,return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
       const pay=[...pays][0]; let shipDate, reason;
       if (pay==='입금요청') { shipDate=arrivalTag(t); reason='지불방법=입금요청 → 입고MMDD'; }
-      else if (validPay.has(pay)) { if (excRows.every(r=>r.newOpt)) { shipDate=nextShippingDate(t); reason=`지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`; } else { shipDate=arrivalTag(t); reason=`지불방법='${pay}', 출고옵션 일부 비어있음 → 입고MMDD`; } }
+      else if (validPay.has(pay)) { if (excRows.every(r=>r.newOpt)) { if (shipDateOverride) { shipDate=shipDateOverride; reason=`지불방법='${pay}', 출고옵션 모두 채워짐 → 출고일 수동지정(${shipDateOverride})`; } else { shipDate=nextShippingDate(t); reason=`지불방법='${pay}', 출고옵션 모두 채워짐 → 다음출고일`; } } else { shipDate=arrivalTag(t); reason=`지불방법='${pay}', 출고옵션 일부 비어있음 → 입고MMDD`; } }
       else { issues.push({order_no:o,issue_type:'알수없는지불방법',description:`지불방법='${pay}'`,return_rows:retRows.map(r=>r.row),exchange_rows:excRows.map(r=>r.row)}); continue; }
       actions.push({order_no:o,exchange_rows:excRows.map(r=>r.row),return_rows:retRows.map(r=>r.row),ship_date:shipDate,done_date:t,reason,skipShipWrite:false});
     }
@@ -301,7 +305,7 @@ app.post('/api/reconcile', async (req, res) => {
       sheetsGet(RETURNS_SS_ID, `'${srcConfig.sheet}'!A${RETURNS_START_ROW}:Z`),
       sheetsGet(EXCHANGE_SS_ID, `'${config.exchangeSheet}'!A${EXCHANGE_START_ROW}:Z`),
     ]);
-    const {actions,issues} = reconcile(parseReturns(retRows, RETURNS_START_ROW, retCols), parseExchanges(excRows, EXCHANGE_START_ROW, excCols), today, config.validPay, category);
+    const {actions,issues} = reconcile(parseReturns(retRows, RETURNS_START_ROW, retCols), parseExchanges(excRows, EXCHANGE_START_ROW, excCols), today, config.validPay, category, shipDateOverride);
     let applied = null;
     if (apply && actions.length > 0) {
       const excShipCol = excCols.shipDate + 1;

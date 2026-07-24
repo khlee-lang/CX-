@@ -173,6 +173,10 @@ export default async function handler(req, res) {
       throw new Error(`${PENDING}와 ${HISTORY}의 헤더 열 구성이 다릅니다 — 행을 그대로 복사하면 데이터가 어긋납니다. (${PENDING}: ${pendingH.join(', ')} / ${HISTORY}: ${historyH.join(', ')})`);
     }
     const lastColLetter = indexToLetter(pendingH.length - 1);
+    // 행수를 셀 때는 항상 채워지는 "주문번호" 열을 기준으로 한다 — "메모"처럼 자주
+    // 비어있는 열로 세면, 끝부분이 연속으로 비어있을 때 Sheets API가 그 뒷부분을
+    // 잘라서 돌려줘 실제보다 적게 세는 사고가 난다(2026-07-24 발견).
+    const orderNoLetter = indexToLetter(cols.orderNo);
 
     const rows = await sheetsGet(jwt, `'${PENDING}'!A${DATA_START_ROW}:${lastColLetter}`);
     const { archiveRows, totalGroups, partialGroups, partialRowCount } = findArchiveRows(rows, cols.orderNo, cols.doneDate);
@@ -186,7 +190,7 @@ export default async function handler(req, res) {
     const meta = await getSheetMeta(jwt);
     const historySheet = meta.find(s => s.properties.title === HISTORY);
     const pendingSheet = meta.find(s => s.properties.title === PENDING);
-    const beforeHistory = await sheetsGet(jwt, `'${HISTORY}'!A${DATA_START_ROW}:A`);
+    const beforeHistory = await sheetsGet(jwt, `'${HISTORY}'!${orderNoLetter}${DATA_START_ROW}:${orderNoLetter}`);
     const histNextRow = DATA_START_ROW + beforeHistory.length;
     const histNeeded = histNextRow - 1 + archiveRows.length + 100;
     if (historySheet.properties.gridProperties.rowCount < histNeeded) {
@@ -201,7 +205,7 @@ export default async function handler(req, res) {
       await sheetsPut(jwt, `'${HISTORY}'!A${startRow}`, chunk);
     }
 
-    const histAfter = await sheetsGet(jwt, `'${HISTORY}'!A${DATA_START_ROW}:A`);
+    const histAfter = await sheetsGet(jwt, `'${HISTORY}'!${orderNoLetter}${DATA_START_ROW}:${orderNoLetter}`);
     const expected = beforeHistory.length + archiveRows.length;
     if (histAfter.length !== expected) {
       throw new Error(`히스토리 쓰기 검증 실패 (기대 ${expected}, 실제 ${histAfter.length}) — 삭제하지 않고 중단`);
@@ -220,8 +224,8 @@ export default async function handler(req, res) {
     }));
     await sheetsBatchUpdate(jwt, { requests: deleteRequests });
 
-    const finalPending = await sheetsGet(jwt, `'${PENDING}'!A${DATA_START_ROW}:A`);
-    const finalHistory = await sheetsGet(jwt, `'${HISTORY}'!A${DATA_START_ROW}:A`);
+    const finalPending = await sheetsGet(jwt, `'${PENDING}'!${orderNoLetter}${DATA_START_ROW}:${orderNoLetter}`);
+    const finalHistory = await sheetsGet(jwt, `'${HISTORY}'!${orderNoLetter}${DATA_START_ROW}:${orderNoLetter}`);
 
     res.json({
       totalGroups, archiveCount: archiveRows.length, partialGroups, partialRowCount, applied: true,

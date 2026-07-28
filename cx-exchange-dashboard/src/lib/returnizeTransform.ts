@@ -72,12 +72,28 @@ function normalizeProductName(name: string): string {
   return PRODUCT_NAME_MAP[name] || name;
 }
 
-// 옵션 문자열 형태 세 가지를 자동 조합 대상으로 인정한다:
+// 옵션 문자열 형태를 자동 조합 대상으로 인정한다:
 // 1) "제품코드 | 색상 | 사이즈" 정확히 3파트 (파이프 구분)
 // 2) "제품코드 / 색상 / 사이즈" 정확히 3파트 (슬래시 구분, 반품업체 표기가 간헐적으로 이 형태로 옴)
 // 3) 파이프·슬래시 둘 다 없이 "색상-사이즈" 형태 (예: "라이트블루- S", "블랙-S")
+// 4) "색상=X, 사이즈=Y" 형태 (키=값, 순서 무관하게 매칭)
+// 5) "[색상]X [사이즈]Y" 형태 (대괄호 키, 순서 무관하게 매칭)
+// 6) "[색상-사이즈]" 형태 (제품코드 없이 이미 대괄호로 묶여서 옴)
+// 7) "색상^사이즈" 형태 (캐럿 구분, 옵션 칸 자체에 있는 경우 — 상품명 접미사 케이스와 별개)
 // 옵션 칸이 아예 비어있으면 옵션 없이 상품명만으로 진행한다(대괄호 없이).
 // 그 외 형태(파트 개수가 안 맞음 등)는 null을 반환해서 "확인필요"로 분류하게 한다.
+function extractKeyedColorSize(raw: string): { color: string; size: string } | null {
+  const colorEq = raw.match(/색상\s*=\s*([^,]+)/);
+  const sizeEq = raw.match(/사이즈\s*=\s*([^,]+)/);
+  if (colorEq && sizeEq) return { color: colorEq[1].trim(), size: sizeEq[1].trim() };
+
+  const colorBracket = raw.match(/\[색상\]\s*([^\[\s]+)/);
+  const sizeBracket = raw.match(/\[사이즈\]\s*([^\[\s]+)/);
+  if (colorBracket && sizeBracket) return { color: colorBracket[1].trim(), size: sizeBracket[1].trim() };
+
+  return null;
+}
+
 export function buildItemOption(productName: string, option: string): string | null {
   const name = (productName || '').trim();
 
@@ -97,6 +113,16 @@ export function buildItemOption(productName: string, option: string): string | n
   const raw = (option || '').trim();
   if (!raw) return name || null;
 
+  const keyed = extractKeyedColorSize(raw);
+  if (keyed) return `${name}[${keyed.color}-${keyed.size}]`;
+
+  const bracketWrapMatch = raw.match(/^\[(.+)-(.+)\]$/);
+  if (bracketWrapMatch) {
+    const color = bracketWrapMatch[1].trim();
+    const size = bracketWrapMatch[2].trim();
+    if (color && size) return `${name}[${color}-${size}]`;
+  }
+
   const pipeParts = raw.split('|').map(p => p.trim()).filter(p => p.length > 0);
   if (pipeParts.length === 3) {
     const [, color, size] = pipeParts;
@@ -114,6 +140,12 @@ export function buildItemOption(productName: string, option: string): string | n
       const dashParts = raw.split('-').map(p => p.trim()).filter(p => p.length > 0);
       if (dashParts.length === 2) {
         const [color, size] = dashParts;
+        return `${name}[${color}-${size}]`;
+      }
+
+      const caretParts = raw.split('^').map(p => p.trim()).filter(p => p.length > 0);
+      if (caretParts.length === 2) {
+        const [color, size] = caretParts;
         return `${name}[${color}-${size}]`;
       }
     }

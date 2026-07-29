@@ -336,6 +336,12 @@ app.post('/api/recompute-returnize', async (req, res) => {
   return handler(req, res);
 });
 
+// BigQuery 출고 데이터도 api/shipments.js(Vercel 서버리스 함수)를 그대로 재사용.
+app.get('/api/shipments', async (req, res) => {
+  const { default: handler } = await import('../api/shipments.js');
+  return handler(req, res);
+});
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });

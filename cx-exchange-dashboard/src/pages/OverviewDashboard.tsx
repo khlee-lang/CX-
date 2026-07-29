@@ -1,68 +1,47 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from '../components/ui/Icon';
 import { DateFilter } from '../components/ui/DateFilter';
-import { fetchDashboardData, type ExchangeData } from '../api/sheets';
+import { KpiCard } from '../components/ui/KpiCard';
+import { ChartCard } from '../components/ui/ChartCard';
+import { RateBadge } from '../components/ui/RateBadge';
+import { MatchCoverageChip } from '../components/ui/MatchCoverageChip';
+import { useDashboardData } from '../hooks/useDashboardData';
+import { useShipments } from '../hooks/useShipments';
+import { AXIS_PROPS, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_CURSOR, SERIES_COLORS, rateTooltipFormatter } from '../lib/chartTheme';
+import { computeRate, lookupProduct, buildMatchCoverage, isJasaScopedChannel } from '../lib/rate';
 import { shipStatus, isShipped, leadTimeDays, median, toISODate, needsRecovery, shippingFee, classifyDefect } from '../lib/exchange';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  AreaChart, Area, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell
 } from 'recharts';
 
 export const OverviewDashboard: React.FC = () => {
-  const [data, setData] = useState<ExchangeData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, reload, startDate, endDate, setStartDate, setEndDate, reloadKey } = useDashboardData('all');
+  const { shipments, index: shipIdx, failed: shipFailed } = useShipments(startDate, endDate, reloadKey);
 
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  // 직전 동일 기간 — 품질 급증 경보를 "건수 급증"이 아니라 "불량률 급증"으로 판단하려면
+  // 직전 기간의 출고량(분모)도 필요하다. BQ 스캔량이 작아(수 MB) 추가 조회 비용은 무시할 수준.
+  const prevRange = useMemo(() => {
+    if (!startDate || !endDate) return { start: undefined, end: undefined };
+    const s = new Date(startDate);
+    const diffDays = Math.max(1, Math.ceil((new Date(endDate).getTime() - s.getTime()) / 86400000));
+    const ps = new Date(s); ps.setDate(ps.getDate() - diffDays);
+    const pe = new Date(s); pe.setDate(pe.getDate() - 1);
+    return { start: ps.toISOString().split('T')[0], end: pe.toISOString().split('T')[0] };
+  }, [startDate, endDate]);
+  const { index: prevShipIdx } = useShipments(prevRange.start, prevRange.end, reloadKey);
 
-  const loadData = async (force = false) => {
-    setLoading(true);
-    try {
-      const result = await fetchDashboardData(force);
-      setData(result);
-      
-      if (!startDate || !endDate) {
-        const allDates: string[] = [];
-        Object.values(result.data).forEach((arr: any[]) => {
-          (arr || []).forEach(row => {
-            if (row['접수일']) {
-              allDates.push(row['접수일'].replace(/\./g, '-'));
-            }
-          });
-        });
-        
-        if (allDates.length > 0) {
-          allDates.sort();
-          const maxDateStr = allDates[allDates.length - 1];
-          const maxDate = new Date(maxDateStr);
-          const start = new Date(maxDate);
-          start.setMonth(start.getMonth() - 1);
-          
-          setEndDate(maxDateStr);
-          setStartDate(start.toISOString().split('T')[0]);
-        }
-      }
-    } catch (err: any) {
-      console.error(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const { stats, chartData, pieData, topProducts, agingData, opsData, qualityAlerts, deptSummary } = useMemo(() => {
+  const { stats, chartData, pieData, topProducts, agingData, opsData, deptSummary, filteredData, productDefectTotal, curDefect, prevDefect } = useMemo(() => {
     if (!data || !startDate || !endDate) return {
       filteredData: { jasa: [], bulryang: [], oebu: [] },
-      stats: { jasa: 0, bulryang: 0, oebu: 0, total: 0, mom: 0 },
+      stats: { jasa: 0, bulryang: 0, oebu: 0, total: 0, mom: 0, jasaScoped: 0, oebuScoped: 0, oebuJasaScoped: 0 },
       chartData: [], pieData: [], topProducts: [],
       agingData: { d3: 0, d5: 0, d7: 0, waitingStock: 0, notReceived: 0, pending: 0 },
       opsData: { leadMedian: null as number | null, prevLeadMedian: null as number | null, shipRate: 0, recoveryOverdue: 0, totalFee: 0, repeatCustomers: 0 },
-      qualityAlerts: [] as { name: string; count: number; prevCount: number }[],
-      deptSummary: { topDefectProduct: null as { name: string; count: number } | null, freeRate: 0 }
+      deptSummary: { topDefectProduct: null as { name: string; count: number } | null, freeRate: 0 },
+      productDefectTotal: 0, prevProductDefectTotal: 0,
+      curDefect: {} as Record<string, number>, prevDefect: {} as Record<string, number>,
     };
 
     const sDate = new Date(startDate);
@@ -99,12 +78,20 @@ export const OverviewDashboard: React.FC = () => {
     const prevTotal = prevJasa.length + prevBulryang.length + prevOebu.length;
     const mom = prevTotal > 0 ? Math.round(((currentTotal - prevTotal) / prevTotal) * 100) : 0;
 
+    // 네이버페이는 [외부몰] 시트에 기재되지만 실제로는 자사몰(카페24) 주문이라
+    // 출고량도 카페24에 포함된다 → 교환율 분자를 자사몰 쪽으로 옮겨야 범위가 맞는다.
+    const oebuJasaScoped = oebu.filter((r) => isJasaScopedChannel(r['채널명'])).length;
+
     const statsObj = {
       jasa: jasa.length,
       bulryang: bulryang.length,
       oebu: oebu.length,
       total: currentTotal,
-      mom
+      mom,
+      // 교환율 계산용 — 출고 채널 기준으로 재배분한 건수
+      jasaScoped: jasa.length + oebuJasaScoped,
+      oebuScoped: oebu.length - oebuJasaScoped,
+      oebuJasaScoped,
     };
 
     // Prepare Chart Data (Daily Trend) — 데이터 없는 날짜도 0으로 채워서
@@ -220,11 +207,8 @@ export const OverviewDashboard: React.FC = () => {
     };
     const curDefect = defectCount(bulryang);
     const prevDefect = defectCount(prevBulryang);
-    const alerts = Object.entries(curDefect)
-      .map(([name, count]) => ({ name, count, prevCount: prevDefect[name] || 0 }))
-      .filter(a => a.count >= 5 && a.count >= 2 * Math.max(a.prevCount, 1))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 2);
+    const productDefectTotal = Object.values(curDefect).reduce((a, b) => a + b, 0);
+    const prevProductDefectTotal = Object.values(prevDefect).reduce((a, b) => a + b, 0);
 
     // 부서별 원라이너 — 생산/QC(제품결함 1위 상품), 재무(무료교환 비중)
     const topDefectEntry = Object.entries(curDefect).sort((a, b) => b[1] - a[1])[0];
@@ -234,8 +218,95 @@ export const OverviewDashboard: React.FC = () => {
       freeRate: jasa.length > 0 ? Math.round((freeCount / jasa.length) * 100) : 0,
     };
 
-    return { filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr, topProducts: topProdArr, agingData: agingMap, opsData: ops, qualityAlerts: alerts, deptSummary: dept };
+    return {
+      filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr,
+      topProducts: topProdArr, agingData: agingMap, opsData: ops, deptSummary: dept,
+      productDefectTotal, prevProductDefectTotal, curDefect, prevDefect,
+    };
   }, [data, startDate, endDate]);
+
+  // 품질 급증 경보 — 건수가 아니라 "불량률"이 직전 기간의 2배 이상으로 뛴 상품.
+  // 출고량이 붙기 전(또는 조회 실패)에는 기존 건수 기준으로 폴백한다.
+  const qualityAlerts = useMemo(() => {
+    const MIN_VOL = 100; // 출고 100개 미만은 1~2건으로도 비율이 튀어 경보 대상에서 제외
+    if (shipIdx && prevShipIdx) {
+      return Object.entries(curDefect)
+        .map(([name, count]) => {
+          const curShipped = lookupProduct(shipIdx, name)?.total ?? null;
+          const prevShipped = lookupProduct(prevShipIdx, name)?.total ?? null;
+          const prevCount = prevDefect[name] || 0;
+          const curRate = curShipped && curShipped > 0 ? (count / curShipped) * 100 : null;
+          const prevRate = prevShipped && prevShipped > 0 ? (prevCount / prevShipped) * 100 : null;
+          return { name, count, prevCount, curShipped, curRate, prevRate };
+        })
+        .filter((a) =>
+          a.curRate !== null &&
+          (a.curShipped ?? 0) >= MIN_VOL &&
+          a.count >= 3 &&
+          // 직전 기간 불량률이 0이면 비교 불가 → 건수 기준으로 급증 판단
+          (a.prevRate !== null && a.prevRate > 0 ? a.curRate >= 2 * a.prevRate : a.count >= 5),
+        )
+        .sort((a, b) => (b.curRate ?? 0) - (a.curRate ?? 0))
+        .slice(0, 2);
+    }
+    return Object.entries(curDefect)
+      .map(([name, count]) => ({ name, count, prevCount: prevDefect[name] || 0, curShipped: null, curRate: null, prevRate: null }))
+      .filter((a) => a.count >= 5 && a.count >= 2 * Math.max(a.prevCount, 1))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 2);
+  }, [curDefect, prevDefect, shipIdx, prevShipIdx]);
+
+  // 교환율/불량률 — 출고 데이터(shipIdx)가 로드된 뒤에만 계산 가능해서 별도 useMemo로 분리
+  const { rateKpis, matchCoverage, topProductsWithRate } = useMemo(() => {
+    if (!shipIdx) {
+      return { rateKpis: null, matchCoverage: null, topProductsWithRate: topProducts };
+    }
+    const overall = computeRate(stats.jasa + stats.oebu, shipIdx.total.total);
+    // 네이버페이 출고분은 카페24에 포함되므로 분자도 자사몰 쪽으로 옮겨 계산
+    const jasaRate = computeRate(stats.jasaScoped, shipIdx.total.jasa);
+    const oebuRate = computeRate(stats.oebuScoped, shipIdx.total.oebu);
+    const defectRate = computeRate(productDefectTotal, shipIdx.total.total);
+
+    const coverage = buildMatchCoverage(
+      [...filteredData.jasa, ...filteredData.oebu, ...filteredData.bulryang],
+      shipIdx,
+    );
+
+    const withRate = topProducts.map((p) => {
+      const shipped = lookupProduct(shipIdx, p.name);
+      const r = computeRate(p.count, shipped?.total ?? null, 0);
+      return { ...p, rate: r.rate, shipped: r.shipped };
+    });
+
+    return {
+      rateKpis: { overall, jasaRate, oebuRate, defectRate },
+      matchCoverage: coverage,
+      topProductsWithRate: withRate,
+    };
+  }, [shipIdx, stats, productDefectTotal, topProducts, filteredData]);
+
+  // 출고량 vs 교환 이중축 — 자사몰+외부몰 접수 대 출고량 일별 비교 (3월 이전은 출고 데이터 없어 rate=null)
+  const dualAxisData = useMemo(() => {
+    if (!shipments || !startDate || !endDate) return [] as { date: string; exchanges: number; shipped: number | null; rate: number | null }[];
+    const exMap = new Map<string, number>();
+    [...filteredData.jasa, ...filteredData.oebu].forEach((r) => {
+      const d = r['접수일']?.replace(/\./g, '-');
+      if (d) exMap.set(d, (exMap.get(d) || 0) + 1);
+    });
+    const shipMap = new Map<string, number>();
+    shipments.byDay.forEach((r) => {
+      shipMap.set(r.date, (shipMap.get(r.date) || 0) + r.qty);
+    });
+    const arr: { date: string; exchanges: number; shipped: number | null; rate: number | null }[] = [];
+    for (let d = new Date(startDate); d <= new Date(endDate); d.setDate(d.getDate() + 1)) {
+      const key = d.toISOString().split('T')[0];
+      const exchanges = exMap.get(key) || 0;
+      const shipped = shipMap.has(key) ? shipMap.get(key)! : null;
+      const rate = shipped && shipped > 0 ? (exchanges / shipped) * 100 : null;
+      arr.push({ date: key.substring(5), exchanges, shipped, rate });
+    }
+    return arr;
+  }, [shipments, startDate, endDate, filteredData]);
 
   if (loading && !data) return (
     <div className="flex h-[80vh] items-center justify-center text-indigo-600 font-bold animate-pulse">
@@ -244,7 +315,11 @@ export const OverviewDashboard: React.FC = () => {
   );
 
   const unshippedTotal = agingData.pending + agingData.waitingStock + agingData.notReceived;
-  const KPI_DATA = [
+  const KPI_DATA: {
+    label: string; value: string; detail: string;
+    color: 'indigo' | 'emerald' | 'orange' | 'rose' | 'slate';
+    trend?: 'up' | 'down'; isAlert?: boolean;
+  }[] = [
     { label: '전체 교환 접수', value: stats.total.toLocaleString(), detail: `전기 대비 ${stats.mom >= 0 ? '+' : ''}${stats.mom}%`, color: 'indigo', trend: stats.mom >= 0 ? 'up' : 'down' },
     { label: '자사몰 일반교환', value: stats.jasa.toLocaleString(), detail: `${Math.round((stats.jasa/stats.total)*100 || 0)}% 비중`, color: 'emerald' },
     { label: '외부몰 교환 전체', value: stats.oebu.toLocaleString(), detail: `${Math.round((stats.oebu/stats.total)*100 || 0)}% 비중`, color: 'orange' },
@@ -268,16 +343,19 @@ export const OverviewDashboard: React.FC = () => {
           <h2 className="text-3xl font-black text-slate-900 tracking-tight">전체 현황 Dashboard</h2>
           <p className="text-sm text-slate-400 font-bold mt-1 tracking-wide uppercase opacity-70">Logistics & CX Real-time Stream Analysis</p>
         </div>
-        <div className="flex gap-4 items-center bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
-           <DateFilter 
-            startDate={startDate} 
-            endDate={endDate} 
-            onStartDateChange={setStartDate} 
-            onEndDateChange={setEndDate} 
-          />
-          <button onClick={() => loadData(true)} className="p-2 hover:bg-slate-50 transition-colors border-l border-slate-100 ml-2">
-            <Icon name="sync" className={loading ? 'animate-spin text-indigo-600' : 'text-slate-400'} />
-          </button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex gap-4 items-center bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
+             <DateFilter
+              startDate={startDate}
+              endDate={endDate}
+              onStartDateChange={setStartDate}
+              onEndDateChange={setEndDate}
+            />
+            <button onClick={() => reload()} className="p-2 hover:bg-slate-50 transition-colors border-l border-slate-100 ml-2">
+              <Icon name="sync" className={loading ? 'animate-spin text-indigo-600' : 'text-slate-400'} />
+            </button>
+          </div>
+          <MatchCoverageChip coverage={matchCoverage} failed={shipFailed} />
         </div>
       </section>
 
@@ -292,7 +370,16 @@ export const OverviewDashboard: React.FC = () => {
             <div className="flex flex-wrap gap-x-6 gap-y-1">
               {qualityAlerts.map((a, i) => (
                 <p key={i} className="text-sm font-bold text-rose-700">
-                  <span className="font-black">{a.name}</span> 불량 급증 — 이번 기간 {a.count}건 (전기 {a.prevCount}건)
+                  <span className="font-black">{a.name}</span> 불량 급증 —{' '}
+                  {a.curRate !== null ? (
+                    <>
+                      불량률 {a.curRate.toFixed(2)}%
+                      {a.prevRate !== null && a.prevRate > 0 && ` (전기 ${a.prevRate.toFixed(2)}%)`}
+                      {' · '}{a.count}건 / 출고 {a.curShipped?.toLocaleString()}건
+                    </>
+                  ) : (
+                    <>이번 기간 {a.count}건 (전기 {a.prevCount}건)</>
+                  )}
                 </p>
               ))}
             </div>
@@ -300,90 +387,106 @@ export const OverviewDashboard: React.FC = () => {
         </section>
       )}
 
-      {/* KPI Section */}
+      {/* 교환율 KPI — 출고량 대비 교환율. 출고 데이터 매칭 실패 시 카드 자체를 숨김(graceful degradation) */}
+      {rateKpis && (
+        <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+          <KpiCard
+            label="전사 교환율"
+            value={rateKpis.overall.rate !== null ? `${rateKpis.overall.rate.toFixed(1)}%` : '—'}
+            detail={`교환 ${(stats.jasa + stats.oebu).toLocaleString()}건 / 출고 ${(rateKpis.overall.shipped ?? 0).toLocaleString()}건`}
+            tone="accent"
+            accentColor="indigo"
+          />
+          <KpiCard
+            label="자사몰 교환율"
+            value={rateKpis.jasaRate.rate !== null ? `${rateKpis.jasaRate.rate.toFixed(1)}%` : '—'}
+            detail={`교환 ${stats.jasaScoped.toLocaleString()}건 / 출고 ${(rateKpis.jasaRate.shipped ?? 0).toLocaleString()}건${stats.oebuJasaScoped > 0 ? ` (네이버페이 ${stats.oebuJasaScoped}건 포함)` : ''}`}
+            accentColor="emerald"
+          />
+          <KpiCard
+            label="외부몰 교환율"
+            value={rateKpis.oebuRate.rate !== null ? `${rateKpis.oebuRate.rate.toFixed(1)}%` : '—'}
+            detail={`교환 ${stats.oebuScoped.toLocaleString()}건 / 출고 ${(rateKpis.oebuRate.shipped ?? 0).toLocaleString()}건${stats.oebuJasaScoped > 0 ? ` (네이버페이 제외)` : ''}`}
+            accentColor="orange"
+          />
+          <KpiCard
+            label="불량률"
+            value={rateKpis.defectRate.rate !== null ? `${rateKpis.defectRate.rate.toFixed(1)}%` : '—'}
+            detail={`제품결함 ${productDefectTotal.toLocaleString()}건 / 출고 ${(rateKpis.defectRate.shipped ?? 0).toLocaleString()}건`}
+            tone="alert"
+            accentColor="rose"
+          />
+        </section>
+      )}
+
+      {/* KPI Section (건수) */}
       <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
         {KPI_DATA.map((kpi, idx) => (
-          <div key={idx} className="bg-white p-7 rounded-[24px] shadow-sm border border-slate-100 relative overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all duration-300">
-             <div className="relative z-10">
-               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5">{kpi.label}</p>
-               <h3 className={`text-3xl font-black ${kpi.isAlert ? 'text-rose-600' : 'text-slate-900'}`}>{kpi.value}</h3>
-               <div className="mt-4 flex items-center gap-1.5">
-                   {kpi.trend && (
-                    <Icon name={kpi.trend === 'up' ? 'trending_up' : 'trending_down'} className={kpi.trend === 'up' ? 'text-emerald-500' : 'text-rose-500'} />
-                  )}
-                  <span className={`text-[10px] font-black ${kpi.trend === 'up' ? 'text-emerald-500' : kpi.trend === 'down' ? 'text-rose-500' : 'text-slate-400'}`}>
-                    {kpi.detail}
-                  </span>
-               </div>
-             </div>
-             <div className={`absolute -right-4 -bottom-4 w-20 h-20 rounded-full opacity-5 group-hover:scale-150 transition-transform duration-700 bg-${kpi.color}-500`}></div>
-          </div>
+          <KpiCard
+            key={idx}
+            label={kpi.label}
+            value={kpi.value}
+            detail={kpi.detail}
+            tone={kpi.isAlert ? 'alert' : 'default'}
+            trend={kpi.trend ? { direction: kpi.trend } : undefined}
+            accentColor={kpi.color}
+          />
         ))}
       </section>
 
       {/* 리스크 & 비용 지표 — 물류/재무/CX가 가져갈 핵심 운영지표 */}
       <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
         {OPS_DATA.map((m, idx) => (
-          <div key={idx} className="bg-white px-6 py-5 rounded-2xl shadow-sm border border-slate-100">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{m.label}</p>
-            <p className={`text-2xl font-black ${m.good ? 'text-slate-900' : 'text-rose-600'}`}>{m.value}</p>
-            <p className="text-[10px] font-bold text-slate-400 mt-1">{m.detail}</p>
-          </div>
+          <KpiCard
+            key={idx}
+            variant="compact"
+            label={m.label}
+            value={m.value}
+            detail={m.detail}
+            tone={m.good ? 'default' : 'alert'}
+          />
         ))}
       </section>
 
       {/* Main Analysis Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
          {/* Daily Trend (8/12) */}
-         <div className="lg:col-span-8 bg-white p-8 rounded-[32px] shadow-sm border border-slate-100">
-            <div className="flex justify-between items-center mb-10">
-               <div>
-                  <h4 className="text-lg font-black text-slate-900">전체 출고 및 교환 추이</h4>
-                  <p className="text-xs text-slate-400 font-bold mt-1">Daily interaction metrics over selected period</p>
-               </div>
-               <div className="flex gap-6 uppercase text-[9px] font-black tracking-widest">
-                  <div className="flex items-center gap-2 text-indigo-600">
-                     <span className="w-2.5 h-2.5 rounded-full bg-indigo-600"></span> 자사몰
-                  </div>
-                  <div className="flex items-center gap-2 text-orange-500">
-                     <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span> 외부몰
-                  </div>
-                  <div className="flex items-center gap-2 text-rose-500">
-                     <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span> 불량
-                  </div>
-               </div>
-            </div>
-            <div className="h-[340px]">
-               <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-                     <defs>
-                        <linearGradient id="fillJasa" x1="0" y1="0" x2="0" y2="1">
-                           <stop offset="5%" stopColor="#6366f1" stopOpacity={0.25} />
-                           <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="fillOebu" x1="0" y1="0" x2="0" y2="1">
-                           <stop offset="5%" stopColor="#f97316" stopOpacity={0.2} />
-                           <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
-                        </linearGradient>
-                     </defs>
-                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                     <XAxis
-                        dataKey="date" axisLine={false} tickLine={false}
-                        tick={{ fontSize: 10, fontWeight: 800, fill: '#94a3b8' }} dy={10}
-                        interval={Math.max(0, Math.ceil(chartData.length / 10) - 1)}
-                     />
-                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 800, fill: '#94a3b8' }} width={32} allowDecimals={false} />
-                     <Tooltip
-                        cursor={{ stroke: '#e2e8f0', strokeWidth: 1 }}
-                        contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}
-                     />
-                     <Area type="monotone" dataKey="jasa" name="자사몰" stroke="#6366f1" strokeWidth={3} fill="url(#fillJasa)" dot={false} activeDot={{ r: 5 }} />
-                     <Area type="monotone" dataKey="oebu" name="외부몰" stroke="#f97316" strokeWidth={3} fill="url(#fillOebu)" dot={false} activeDot={{ r: 5 }} />
-                     <Area type="monotone" dataKey="bulryang" name="불량" stroke="#ef4444" strokeWidth={2} fill="none" dot={false} activeDot={{ r: 4 }} />
-                  </AreaChart>
-               </ResponsiveContainer>
-            </div>
-         </div>
+         <ChartCard
+            className="lg:col-span-8"
+            title="전체 출고 및 교환 추이"
+            subtitle="Daily interaction metrics over selected period"
+            legend={[
+              { label: '자사몰', color: SERIES_COLORS.jasa },
+              { label: '외부몰', color: SERIES_COLORS.oebu },
+              { label: '불량', color: SERIES_COLORS.bulryang },
+            ]}
+            height={340}
+         >
+            <ResponsiveContainer width="100%" height="100%">
+               <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+                  <defs>
+                     <linearGradient id="fillJasa" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={SERIES_COLORS.jasa} stopOpacity={0.25} />
+                        <stop offset="95%" stopColor={SERIES_COLORS.jasa} stopOpacity={0} />
+                     </linearGradient>
+                     <linearGradient id="fillOebu" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={SERIES_COLORS.oebu} stopOpacity={0.2} />
+                        <stop offset="95%" stopColor={SERIES_COLORS.oebu} stopOpacity={0} />
+                     </linearGradient>
+                  </defs>
+                  <CartesianGrid {...GRID_PROPS} />
+                  <XAxis
+                     dataKey="date" {...AXIS_PROPS} dy={10}
+                     interval={Math.max(0, Math.ceil(chartData.length / 10) - 1)}
+                  />
+                  <YAxis {...AXIS_PROPS} width={32} allowDecimals={false} />
+                  <Tooltip cursor={TOOLTIP_CURSOR} contentStyle={TOOLTIP_STYLE} />
+                  <Area type="monotone" dataKey="jasa" name="자사몰" stroke={SERIES_COLORS.jasa} strokeWidth={3} fill="url(#fillJasa)" dot={false} activeDot={{ r: 5 }} />
+                  <Area type="monotone" dataKey="oebu" name="외부몰" stroke={SERIES_COLORS.oebu} strokeWidth={3} fill="url(#fillOebu)" dot={false} activeDot={{ r: 5 }} />
+                  <Area type="monotone" dataKey="bulryang" name="불량" stroke={SERIES_COLORS.bulryang} strokeWidth={2} fill="none" dot={false} activeDot={{ r: 4 }} />
+               </AreaChart>
+            </ResponsiveContainer>
+         </ChartCard>
 
          {/* Share & Typing (4/12) */}
          <div className="lg:col-span-4 space-y-8">
@@ -424,13 +527,34 @@ export const OverviewDashboard: React.FC = () => {
          </div>
       </div>
 
+      {/* 출고량 vs 교환 이중축 — 3월 이전(출고 데이터 없음)은 rate 라인이 끊김 */}
+      {dualAxisData.length > 0 && (
+        <ChartCard
+          title="출고량 대비 교환율 추이"
+          subtitle="자사몰 + 외부몰 기준, 막대=출고량(좌축) · 선=교환율%(우축)"
+          height={280}
+        >
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={dualAxisData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+              <CartesianGrid {...GRID_PROPS} />
+              <XAxis dataKey="date" {...AXIS_PROPS} interval={Math.max(0, Math.ceil(dualAxisData.length / 12) - 1)} />
+              <YAxis yAxisId="left" {...AXIS_PROPS} width={40} allowDecimals={false} />
+              <YAxis yAxisId="right" orientation="right" {...AXIS_PROPS} width={40} unit="%" />
+              <Tooltip cursor={TOOLTIP_CURSOR} contentStyle={TOOLTIP_STYLE} formatter={rateTooltipFormatter} />
+              <Bar yAxisId="left" dataKey="shipped" name="출고량" fill={SERIES_COLORS.shipped} radius={[4, 4, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="rate" name="교환율(%)" stroke={SERIES_COLORS.jasa} strokeWidth={3} dot={false} connectNulls={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </ChartCard>
+      )}
+
       {/* Analysis Widgets (Top Products & Aging) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-4">
          {/* Top 5 Products */}
          <div className="bg-white p-8 rounded-[32px] shadow-sm border border-slate-100">
             <h4 className="text-base font-black text-slate-900 mb-8 border-b border-slate-50 pb-4">TOP 3 교환 발생 상품</h4>
             <div className="space-y-6">
-               {topProducts.map((p, i) => (
+               {topProductsWithRate.map((p, i) => (
                  <div key={i} className="flex items-center justify-between group">
                     <div className="flex items-center gap-4">
                        <span className="text-lg font-black text-slate-200 group-hover:text-indigo-600 transition-colors">0{i+1}</span>
@@ -441,12 +565,13 @@ export const OverviewDashboard: React.FC = () => {
                           </p>
                        </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right flex items-center gap-2">
                        <p className="text-sm font-black text-slate-900">{p.count}건</p>
+                       {'rate' in p && <RateBadge rate={p.rate ?? null} exchanges={p.count} shipped={p.shipped} />}
                     </div>
                  </div>
                ))}
-               {topProducts.length === 0 && <p className="text-center text-slate-300 py-10 font-bold italic">조회된 상품 데이터가 없습니다.</p>}
+               {topProductsWithRate.length === 0 && <p className="text-center text-slate-300 py-10 font-bold italic">조회된 상품 데이터가 없습니다.</p>}
             </div>
          </div>
 

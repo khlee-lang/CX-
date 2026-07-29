@@ -4,7 +4,12 @@ import { createRequire } from 'module';
 import { execFileSync } from 'child_process';
 
 // 출고 데이터 테이블 (verish-pm 프로젝트, 조회 권한은 cx-part SA에 이미 부여됨)
+// 판토스 전환(2026-03-02) 이후 실시간 데이터.
 export const SHIPMENT_TABLE = '`verish-pm.cx.daily_channel_sku_stockout`';
+// 판토스 전환 이전(이지어드민/한솔물류) 출고 히스토리, 2024-05-02~2026-02-27.
+// 2026-07-29 강희님이 원본 CSV를 집계해 업로드. cx 데이터셋 단위 권한이라 SA가 바로 읽을 수 있음.
+export const HISTORICAL_SHIPMENT_TABLE = '`verish-pm.cx.daily_channel_sku_stockout_historical`';
+export const HISTORICAL_DATA_MIN_DATE = '2024-05-02';
 export const BQ_LOCATION = 'asia-northeast3';
 
 function getCreds() {

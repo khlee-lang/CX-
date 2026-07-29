@@ -3,23 +3,34 @@ import {
   createBigQueryWithGcloudToken,
   isLocalDev,
   SHIPMENT_TABLE,
+  HISTORICAL_SHIPMENT_TABLE,
+  HISTORICAL_DATA_MIN_DATE,
   BQ_LOCATION,
 } from './_bigquery.js';
 
 // 국내-B2C 출고량 집계. 자사몰 = 카페24(신), 외부몰 = 그 외 국내-B2C.
 // CS(딥다이브)는 교환출고 채널이라 교환율 분모에서 제외.
+//
+// 판토스 전환일(2026-03-02)을 걸치는 조회를 위해 라이브 테이블과 과거(이지어드민/
+// 한솔물류) 테이블을 UNION ALL 한다. 각 서브쿼리에 동일한 날짜 필터를 걸어두면
+// 조회 기간이 한쪽 테이블 범위에만 있을 때는 다른 쪽이 자연히 빈 결과가 된다.
+const ROW_SELECT = `
+  wms_out_confirm_date AS d,
+  sales_channel,
+  IF(sales_channel = '카페24(신)', 'jasa', 'oebu') AS channel_group,
+  name, category1, color, size,
+  stockout_cnt
+`;
+const DATE_FILTER = `
+  channel_status = '국내-B2C'
+  AND sales_channel != 'CS(딥다이브)'
+  AND wms_out_confirm_date BETWEEN @start AND @end
+`;
 const BASE_CTE = `
   WITH base AS (
-    SELECT
-      wms_out_confirm_date AS d,
-      sales_channel,
-      IF(sales_channel = '카페24(신)', 'jasa', 'oebu') AS channel_group,
-      name, category1, color, size,
-      stockout_cnt
-    FROM ${SHIPMENT_TABLE}
-    WHERE channel_status = '국내-B2C'
-      AND sales_channel != 'CS(딥다이브)'
-      AND wms_out_confirm_date BETWEEN @start AND @end
+    SELECT ${ROW_SELECT} FROM ${SHIPMENT_TABLE} WHERE ${DATE_FILTER}
+    UNION ALL
+    SELECT ${ROW_SELECT} FROM ${HISTORICAL_SHIPMENT_TABLE} WHERE ${DATE_FILTER}
   )
 `;
 
@@ -42,7 +53,9 @@ const QUERIES = {
 };
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
-const DATA_MIN_DATE = '2026-03-02';
+const DATA_MIN_DATE = HISTORICAL_DATA_MIN_DATE;
+// 판토스 전환 이지어드민/한솔물류 데이터 사이 실제 공백 구간(자료 없음, 이틀).
+const COVERAGE_GAP = { start: '2026-02-28', end: '2026-03-01' };
 
 function kstDateStr(offsetDays = 0) {
   const kst = new Date(Date.now() + 9 * 3600 * 1000 + offsetDays * 86400 * 1000);
@@ -99,7 +112,7 @@ export default async function handler(req, res) {
 
     const payload = {
       range: { start, end },
-      coverage: { minDate: DATA_MIN_DATE },
+      coverage: { minDate: DATA_MIN_DATE, gap: COVERAGE_GAP },
       fetchedAt: new Date().toISOString(),
       byDay,
       byChannel,

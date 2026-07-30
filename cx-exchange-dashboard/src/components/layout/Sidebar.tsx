@@ -6,7 +6,7 @@ const INACTIVE_CLASS = "flex items-center gap-3 px-3 py-2.5 text-slate-500 dark:
 const ACTIVE_CLASS = "flex items-center gap-3 px-3 py-2.5 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-bold rounded-lg transition-transform scale-95 active:scale-100";
 
 const NAV_ITEMS = [
-  { path: '/', icon: 'dashboard', label: '종합 대시보드' },
+  { path: '/dashboard', icon: 'dashboard', label: '종합 대시보드' },
   { path: '/jasa-exchange', icon: 'store', label: '자사몰 교환 분석' },
   { path: '/oebu-exchange', icon: 'shopping_cart', label: '외부몰 교환 분석' },
   { path: '/defective-analysis', icon: 'report_problem', label: '불량 교환 분석' },

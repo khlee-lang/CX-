@@ -57,6 +57,8 @@ export default {
         "primary-container": "#4f46e5"
       },
       fontFamily: {
+        "instrument-serif": ['"Instrument Serif"', "serif"],
+        sans: ["Inter", "Pretendard", "system-ui", "sans-serif"],
         "headline": ["Manrope", "sans-serif"],
         "body": ["Pretendard", "Inter", "sans-serif"],
         "label": ["Pretendard", "Inter", "sans-serif"]

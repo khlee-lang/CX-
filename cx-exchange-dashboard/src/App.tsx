@@ -12,13 +12,15 @@ import { ProductDetail } from './pages/ProductDetail';
 import { ReportCenter } from './pages/ReportCenter';
 import { PantosOps } from './pages/PantosOps';
 import { ReturnizeUpload } from './pages/ReturnizeUpload';
+import { Landing } from './pages/Landing';
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<OverviewDashboard />} />
+        <Route path="/" element={<Landing />} />
+        <Route element={<Layout />}>
+          <Route path="dashboard" element={<OverviewDashboard />} />
           <Route path="jasa-exchange" element={<JasaMallExchange />} />
           <Route path="oebu-exchange" element={<OebuMallExchange />} />
           <Route path="defective-analysis" element={<DefectiveAnalysis />} />

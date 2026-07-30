@@ -29,14 +29,15 @@ export interface CreateAnomalyEventInput {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export const fetchAnomalyEvents = async (limit = 20): Promise<AnomalyEvent[]> => {
-  const response = await fetch(`${API_BASE_URL}/exchange-anomaly?limit=${limit}`);
+  // Vercel 함수 12개 제한으로 exchange-history 함수에 ?resource=anomaly 로 합침
+  const response = await fetch(`${API_BASE_URL}/exchange-history?resource=anomaly&limit=${limit}`);
   if (!response.ok) throw new Error(`이상 이벤트 조회 실패 (${response.status})`);
   const data = await response.json();
   return data.events;
 };
 
 export const createAnomalyEvent = async (input: CreateAnomalyEventInput): Promise<string> => {
-  const response = await fetch(`${API_BASE_URL}/exchange-anomaly`, {
+  const response = await fetch(`${API_BASE_URL}/exchange-history?resource=anomaly`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),

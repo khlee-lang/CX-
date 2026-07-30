@@ -21,7 +21,8 @@ export const fetchExchangeHistoryDetail = async (
   const cached = cache.get(key);
   if (cached) return cached;
 
-  const url = `${API_BASE_URL}/exchange-history-detail?start=${start}&end=${end}&channelGroup=${channelGroup}`;
+  // Vercel 함수 12개 제한으로 exchange-history 함수에 ?resource=detail 로 합침
+  const url = `${API_BASE_URL}/exchange-history?resource=detail&start=${start}&end=${end}&channelGroup=${channelGroup}`;
   const response = await fetch(url);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));

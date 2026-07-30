@@ -343,24 +343,15 @@ app.get('/api/shipments', async (req, res) => {
 });
 
 // 옛날 교환접수 히스토리(2024-05~2026-01)도 마찬가지로 재사용.
+// Vercel Hobby 함수 12개 제한으로 드릴다운(?resource=detail)과
+// 이상 이벤트 로그(?resource=anomaly)가 이 핸들러 하나에 합쳐져 있다.
+// POST는 이상 이벤트 기록용.
 app.get('/api/exchange-history', async (req, res) => {
   const { default: handler } = await import('../api/exchange-history.js');
   return handler(req, res);
 });
-
-// 관제 그래프 드릴다운(기간×채널그룹별 TOP 상품 + 불량 사유)도 마찬가지로 재사용.
-app.get('/api/exchange-history-detail', async (req, res) => {
-  const { default: handler } = await import('../api/exchange-history-detail.js');
-  return handler(req, res);
-});
-
-// 관제 그래프 밴드초과 이벤트 로그(조회/기록)도 마찬가지로 재사용.
-app.get('/api/exchange-anomaly', async (req, res) => {
-  const { default: handler } = await import('../api/exchange-anomaly.js');
-  return handler(req, res);
-});
-app.post('/api/exchange-anomaly', async (req, res) => {
-  const { default: handler } = await import('../api/exchange-anomaly.js');
+app.post('/api/exchange-history', async (req, res) => {
+  const { default: handler } = await import('../api/exchange-history.js');
   return handler(req, res);
 });
 

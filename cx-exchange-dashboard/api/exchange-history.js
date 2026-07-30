@@ -5,6 +5,8 @@ import {
   HISTORICAL_EXCHANGE_TABLE,
   BQ_LOCATION,
 } from './_bigquery.js';
+import detailHandler from './_exchange-history-detail.js';
+import anomalyHandler from './_exchange-anomaly.js';
 
 // 옛날 교환접수(2024-05-28~2026-01-06) 일별×채널그룹 건수.
 // 라이브 기간(2026-05-04~)의 교환건수는 구글시트(dashboard-data)에서 오므로
@@ -30,6 +32,11 @@ let cache = null;
 const TTL = 24 * 60 * 60 * 1000;
 
 export default async function handler(req, res) {
+  // Vercel Hobby 플랜 함수 12개 제한 → 드릴다운·이상 이벤트 로그를
+  // 이 함수 하나에 합치고 ?resource= 로 분기한다 (기본값: 히스토리 목록).
+  if (req.query.resource === 'detail') return detailHandler(req, res);
+  if (req.query.resource === 'anomaly') return anomalyHandler(req, res);
+
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

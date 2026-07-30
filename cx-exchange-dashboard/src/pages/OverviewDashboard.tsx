@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { Icon } from '../components/ui/Icon';
 import { DateFilter } from '../components/ui/DateFilter';
 import { KpiCard } from '../components/ui/KpiCard';
-import { ChartCard } from '../components/ui/ChartCard';
 import { RateBadge } from '../components/ui/RateBadge';
 import { MatchCoverageChip } from '../components/ui/MatchCoverageChip';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -12,13 +11,9 @@ import { useExchangeHistory } from '../hooks/useExchangeHistory';
 import { ControlChart } from '../components/ui/ControlChart';
 import { AnomalyLogPanel } from '../components/ui/AnomalyLogPanel';
 import { buildLiveDailyExchange } from '../lib/controlChart';
-import { AXIS_PROPS, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_CURSOR, SERIES_COLORS } from '../lib/chartTheme';
 import { computeRate, lookupProduct, buildMatchCoverage, isJasaScopedChannel } from '../lib/rate';
 import { shipStatus, isShipped, leadTimeDays, median, toISODate, needsRecovery, shippingFee, classifyDefect } from '../lib/exchange';
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell
-} from 'recharts';
+import { Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 export const OverviewDashboard: React.FC = () => {
   const { data, loading, reload, startDate, endDate, setStartDate, setEndDate, reloadKey } = useDashboardData('all');
@@ -45,11 +40,11 @@ export const OverviewDashboard: React.FC = () => {
   }, [startDate, endDate]);
   const { index: prevShipIdx } = useShipments(prevRange.start, prevRange.end, reloadKey);
 
-  const { stats, chartData, pieData, topProducts, agingData, opsData, deptSummary, filteredData, productDefectTotal, curDefect, prevDefect } = useMemo(() => {
+  const { stats, pieData, topProducts, agingData, opsData, deptSummary, filteredData, productDefectTotal, curDefect, prevDefect } = useMemo(() => {
     if (!data || !startDate || !endDate) return {
       filteredData: { jasa: [], bulryang: [], oebu: [] },
       stats: { jasa: 0, bulryang: 0, oebu: 0, total: 0, mom: 0, jasaScoped: 0, oebuScoped: 0, oebuJasaScoped: 0 },
-      chartData: [], pieData: [], topProducts: [],
+      pieData: [], topProducts: [],
       agingData: { d3: 0, d5: 0, d7: 0, waitingStock: 0, notReceived: 0, pending: 0 },
       opsData: { leadMedian: null as number | null, prevLeadMedian: null as number | null, shipRate: 0, recoveryOverdue: 0, totalFee: 0, repeatCustomers: 0 },
       deptSummary: { topDefectProduct: null as { name: string; count: number } | null, freeRate: 0 },
@@ -106,28 +101,6 @@ export const OverviewDashboard: React.FC = () => {
       oebuScoped: oebu.length - oebuJasaScoped,
       oebuJasaScoped,
     };
-
-    // Prepare Chart Data (Daily Trend) — 데이터 없는 날짜도 0으로 채워서
-    // 실제 접수가 없는 날(주말 등)이 그래프에서 빠지고 이어져 보이지 않게 함
-    const dailyMap: Record<string, { jasa: number, oebu: number, bulryang: number }> = {};
-    const processRows = (rows: any[], key: 'jasa' | 'oebu' | 'bulryang') => {
-      rows.forEach(r => {
-        const d = r['접수일']?.replace(/\./g, '-');
-        if (d) {
-          if (!dailyMap[d]) dailyMap[d] = { jasa: 0, oebu: 0, bulryang: 0 };
-          dailyMap[d][key]++;
-        }
-      });
-    };
-    processRows(jasa, 'jasa');
-    processRows(oebu, 'oebu');
-    processRows(bulryang, 'bulryang');
-    const chartArr: { date: string, jasa: number, oebu: number, bulryang: number }[] = [];
-    for (let d = new Date(sDate); d <= eDate; d.setDate(d.getDate() + 1)) {
-      const key = d.toISOString().split('T')[0];
-      const entry = dailyMap[key] || { jasa: 0, oebu: 0, bulryang: 0 };
-      chartArr.push({ date: key.substring(5), ...entry });
-    }
 
     // Pie Data
     const pieArr = [
@@ -232,7 +205,7 @@ export const OverviewDashboard: React.FC = () => {
     };
 
     return {
-      filteredData: { jasa, bulryang, oebu }, stats: statsObj, chartData: chartArr, pieData: pieArr,
+      filteredData: { jasa, bulryang, oebu }, stats: statsObj, pieData: pieArr,
       topProducts: topProdArr, agingData: agingMap, opsData: ops, deptSummary: dept,
       productDefectTotal, prevProductDefectTotal, curDefect, prevDefect,
     };
@@ -305,6 +278,9 @@ export const OverviewDashboard: React.FC = () => {
   );
 
   const unshippedTotal = agingData.pending + agingData.waitingStock + agingData.notReceived;
+  // 교환율 KPI(rateKpis)가 있을 때는 건수·비중을 그 카드 detail에 흡수해서 한 줄로 합친다
+  // (2026-07-30 UI 피드백: 교환율 카드 4종 + 건수 카드 5종 두 줄이 중복 정보라 하나로 병합).
+  // 출고 매칭 실패로 rateKpis가 없을 때(graceful degradation)는 기존처럼 건수만 보여준다.
   const KPI_DATA: {
     label: string; value: string; detail: string;
     color: 'indigo' | 'emerald' | 'orange' | 'rose' | 'slate';
@@ -315,14 +291,6 @@ export const OverviewDashboard: React.FC = () => {
     { label: '외부몰 교환 전체', value: stats.oebu.toLocaleString(), detail: `${Math.round((stats.oebu/stats.total)*100 || 0)}% 비중`, color: 'orange' },
     { label: '불량교환 전체', value: stats.bulryang.toLocaleString(), detail: `${Math.round((stats.bulryang/stats.total)*100 || 0)}% 발생률`, color: 'rose', isAlert: true },
     { label: '미출고 합계', value: unshippedTotal.toLocaleString(), detail: `재고대기 ${agingData.waitingStock} · 미입고 ${agingData.notReceived}`, color: 'slate' },
-  ];
-
-  const OPS_DATA = [
-    { label: '출고 리드타임 (중앙값)', value: opsData.leadMedian !== null ? `${opsData.leadMedian}일` : '-', detail: opsData.prevLeadMedian !== null ? `전기 ${opsData.prevLeadMedian}일` : '', good: opsData.leadMedian !== null && opsData.prevLeadMedian !== null && opsData.leadMedian <= opsData.prevLeadMedian },
-    { label: '출고 처리율', value: `${opsData.shipRate}%`, detail: '출고일이 확정 날짜인 건 기준', good: opsData.shipRate >= 90 },
-    { label: '회수 지연 (7일+)', value: `${opsData.recoveryOverdue}건`, detail: '자사몰·불량 기준, 미집화 상태', good: opsData.recoveryOverdue === 0 },
-    { label: '교환 배송비 수취', value: `${opsData.totalFee.toLocaleString()}원`, detail: '조회 기간 전 채널 합계', good: true },
-    { label: '반복교환 고객 (3회+)', value: `${opsData.repeatCustomers}명`, detail: '조회 기간 내 전 채널 기준', good: true },
   ];
 
   return (
@@ -377,148 +345,65 @@ export const OverviewDashboard: React.FC = () => {
         </section>
       )}
 
-      {/* 교환율 KPI — 출고량 대비 교환율. 출고 데이터 매칭 실패 시 카드 자체를 숨김(graceful degradation) */}
-      {rateKpis && (
-        <section className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* 교환율 KPI — 건수·비중을 detail에 흡수해 한 줄로 병합(2026-07-30 피드백).
+          출고 데이터 매칭 실패 시(rateKpis 없음)엔 기존 건수 전용 카드로 대체(graceful degradation). */}
+      {rateKpis ? (
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
           <KpiCard
             label="전사 교환율"
             value={rateKpis.overall.rate !== null ? `${rateKpis.overall.rate.toFixed(1)}%` : '—'}
-            detail={`교환 ${(stats.jasa + stats.oebu).toLocaleString()}건 / 출고 ${(rateKpis.overall.shipped ?? 0).toLocaleString()}건`}
+            detail={`교환 ${(stats.jasa + stats.oebu).toLocaleString()}건 · 전기대비 ${stats.mom >= 0 ? '+' : ''}${stats.mom}% / 출고 ${(rateKpis.overall.shipped ?? 0).toLocaleString()}건`}
+            trend={{ direction: stats.mom >= 0 ? 'up' : 'down' }}
             tone="accent"
             accentColor="indigo"
           />
           <KpiCard
             label="자사몰 교환율"
             value={rateKpis.jasaRate.rate !== null ? `${rateKpis.jasaRate.rate.toFixed(1)}%` : '—'}
-            detail={`교환 ${stats.jasaScoped.toLocaleString()}건 / 출고 ${(rateKpis.jasaRate.shipped ?? 0).toLocaleString()}건${stats.oebuJasaScoped > 0 ? ` (네이버페이 ${stats.oebuJasaScoped}건 포함)` : ''}`}
+            detail={`교환 ${stats.jasaScoped.toLocaleString()}건(${Math.round((stats.jasa/stats.total)*100 || 0)}%) / 출고 ${(rateKpis.jasaRate.shipped ?? 0).toLocaleString()}건${stats.oebuJasaScoped > 0 ? ` (네이버페이 ${stats.oebuJasaScoped}건 포함)` : ''}`}
             accentColor="emerald"
           />
           <KpiCard
             label="외부몰 교환율"
             value={rateKpis.oebuRate.rate !== null ? `${rateKpis.oebuRate.rate.toFixed(1)}%` : '—'}
-            detail={`교환 ${stats.oebuScoped.toLocaleString()}건 / 출고 ${(rateKpis.oebuRate.shipped ?? 0).toLocaleString()}건${stats.oebuJasaScoped > 0 ? ` (네이버페이 제외)` : ''}`}
+            detail={`교환 ${stats.oebuScoped.toLocaleString()}건(${Math.round((stats.oebu/stats.total)*100 || 0)}%) / 출고 ${(rateKpis.oebuRate.shipped ?? 0).toLocaleString()}건${stats.oebuJasaScoped > 0 ? ` (네이버페이 제외)` : ''}`}
             accentColor="orange"
           />
           <KpiCard
             label="불량률"
             value={rateKpis.defectRate.rate !== null ? `${rateKpis.defectRate.rate.toFixed(1)}%` : '—'}
-            detail={`제품결함 ${productDefectTotal.toLocaleString()}건 / 출고 ${(rateKpis.defectRate.shipped ?? 0).toLocaleString()}건`}
+            detail={`제품결함 ${productDefectTotal.toLocaleString()}건(${Math.round((stats.bulryang/stats.total)*100 || 0)}%) / 출고 ${(rateKpis.defectRate.shipped ?? 0).toLocaleString()}건`}
             tone="alert"
             accentColor="rose"
           />
+          <KpiCard
+            label="미출고 합계"
+            value={unshippedTotal.toLocaleString()}
+            detail={`재고대기 ${agingData.waitingStock} · 미입고 ${agingData.notReceived}`}
+            accentColor="slate"
+          />
+        </section>
+      ) : (
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
+          {KPI_DATA.map((kpi, idx) => (
+            <KpiCard
+              key={idx}
+              label={kpi.label}
+              value={kpi.value}
+              detail={kpi.detail}
+              tone={kpi.isAlert ? 'alert' : 'default'}
+              trend={kpi.trend ? { direction: kpi.trend } : undefined}
+              accentColor={kpi.color}
+            />
+          ))}
         </section>
       )}
 
-      {/* KPI Section (건수) */}
-      <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
-        {KPI_DATA.map((kpi, idx) => (
-          <KpiCard
-            key={idx}
-            label={kpi.label}
-            value={kpi.value}
-            detail={kpi.detail}
-            tone={kpi.isAlert ? 'alert' : 'default'}
-            trend={kpi.trend ? { direction: kpi.trend } : undefined}
-            accentColor={kpi.color}
-          />
-        ))}
-      </section>
-
-      {/* 리스크 & 비용 지표 — 물류/재무/CX가 가져갈 핵심 운영지표 */}
-      <section className="grid grid-cols-2 lg:grid-cols-5 gap-6">
-        {OPS_DATA.map((m, idx) => (
-          <KpiCard
-            key={idx}
-            variant="compact"
-            label={m.label}
-            value={m.value}
-            detail={m.detail}
-            tone={m.good ? 'default' : 'alert'}
-          />
-        ))}
-      </section>
-
-      {/* Main Analysis Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-         {/* Daily Trend (8/12) */}
-         <ChartCard
-            className="lg:col-span-8"
-            title="전체 출고 및 교환 추이"
-            subtitle="Daily interaction metrics over selected period"
-            legend={[
-              { label: '자사몰', color: SERIES_COLORS.jasa },
-              { label: '외부몰', color: SERIES_COLORS.oebu },
-              { label: '불량', color: SERIES_COLORS.bulryang },
-            ]}
-            height={340}
-         >
-            <ResponsiveContainer width="100%" height="100%">
-               <AreaChart data={chartData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-                  <defs>
-                     <linearGradient id="fillJasa" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={SERIES_COLORS.jasa} stopOpacity={0.25} />
-                        <stop offset="95%" stopColor={SERIES_COLORS.jasa} stopOpacity={0} />
-                     </linearGradient>
-                     <linearGradient id="fillOebu" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={SERIES_COLORS.oebu} stopOpacity={0.2} />
-                        <stop offset="95%" stopColor={SERIES_COLORS.oebu} stopOpacity={0} />
-                     </linearGradient>
-                  </defs>
-                  <CartesianGrid {...GRID_PROPS} />
-                  <XAxis
-                     dataKey="date" {...AXIS_PROPS} dy={10}
-                     interval={Math.max(0, Math.ceil(chartData.length / 10) - 1)}
-                  />
-                  <YAxis {...AXIS_PROPS} width={32} allowDecimals={false} />
-                  <Tooltip cursor={TOOLTIP_CURSOR} contentStyle={TOOLTIP_STYLE} />
-                  <Area type="monotone" dataKey="jasa" name="자사몰" stroke={SERIES_COLORS.jasa} strokeWidth={3} fill="url(#fillJasa)" dot={false} activeDot={{ r: 5 }} />
-                  <Area type="monotone" dataKey="oebu" name="외부몰" stroke={SERIES_COLORS.oebu} strokeWidth={3} fill="url(#fillOebu)" dot={false} activeDot={{ r: 5 }} />
-                  <Area type="monotone" dataKey="bulryang" name="불량" stroke={SERIES_COLORS.bulryang} strokeWidth={2} fill="none" dot={false} activeDot={{ r: 4 }} />
-               </AreaChart>
-            </ResponsiveContainer>
-         </ChartCard>
-
-         {/* Share & Typing (4/12) */}
-         <div className="lg:col-span-4 space-y-8">
-            <div className="bg-white p-8 rounded-[32px] shadow-sm border border-slate-100 h-full">
-               <h4 className="text-lg font-black text-slate-900 mb-8 text-center uppercase tracking-tight">유형별 비교</h4>
-               <div className="h-[250px] relative">
-                  <ResponsiveContainer width="100%" height="100%">
-                     <PieChart>
-                        <Pie
-                           data={pieData}
-                           innerRadius={70}
-                           outerRadius={95}
-                           paddingAngle={10}
-                           dataKey="value"
-                        >
-                           {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
-                        </Pie>
-                        <Tooltip />
-                     </PieChart>
-                  </ResponsiveContainer>
-                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center">
-                     <p className="text-[10px] font-black text-slate-400 tracking-widest uppercase">Total</p>
-                     <p className="text-2xl font-black text-slate-900">{stats.total}</p>
-                  </div>
-               </div>
-               <div className="mt-8 space-y-4">
-                  {pieData.map((e, i) => (
-                    <div key={i} className="flex justify-between items-center text-xs font-bold">
-                       <div className="flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: e.color }}></span>
-                          <span className="text-slate-500">{e.name}</span>
-                       </div>
-                       <span className="text-slate-900">{Math.round((e.value/stats.total)*100)}%</span>
-                    </div>
-                  ))}
-               </div>
-            </div>
-         </div>
-      </div>
-
       {/* 교환율 관제 그래프 — KPI 날짜 필터와 무관하게 2024-05~현재 전체 히스토리 +
-          과거 데이터(2024-07~2025-12)로 계산한 평균±2σ 밴드. 밴드 벗어나면 강조 표시. */}
+          과거 데이터(2024-07~2025-12)로 계산한 평균±2σ 밴드. 밴드 벗어나면 강조 표시.
+          예전엔 이 위에 "전체 출고 및 교환 추이"(자사몰/외부몰/불량 일별 건수) AreaChart가
+          따로 있었는데, 이 관제 그래프가 같은 정보를 교환율 기준으로 더 잘 보여줘서
+          2026-07-30 피드백으로 제거하고 이 그래프로 완전히 대체함. */}
       <ControlChart
         shipments={controlChartShip.shipments}
         exchangeHistory={exchangeHistory}
@@ -528,8 +413,42 @@ export const OverviewDashboard: React.FC = () => {
         bulryangRows={data?.data.bulryang || []}
       />
 
-      <div className="mt-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
         <AnomalyLogPanel />
+        <div className="bg-white p-8 rounded-[32px] shadow-sm border border-slate-100">
+           <h4 className="text-lg font-black text-slate-900 mb-8 text-center uppercase tracking-tight">유형별 비교</h4>
+           <div className="h-[250px] relative">
+              <ResponsiveContainer width="100%" height="100%">
+                 <PieChart>
+                    <Pie
+                       data={pieData}
+                       innerRadius={70}
+                       outerRadius={95}
+                       paddingAngle={10}
+                       dataKey="value"
+                    >
+                       {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                    </Pie>
+                    <Tooltip />
+                 </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center">
+                 <p className="text-[10px] font-black text-slate-400 tracking-widest uppercase">Total</p>
+                 <p className="text-2xl font-black text-slate-900">{stats.total}</p>
+              </div>
+           </div>
+           <div className="mt-8 space-y-4">
+              {pieData.map((e, i) => (
+                <div key={i} className="flex justify-between items-center text-xs font-bold">
+                   <div className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: e.color }}></span>
+                      <span className="text-slate-500">{e.name}</span>
+                   </div>
+                   <span className="text-slate-900">{Math.round((e.value/stats.total)*100)}%</span>
+                </div>
+              ))}
+           </div>
+        </div>
       </div>
 
       {/* Analysis Widgets (Top Products & Aging) */}

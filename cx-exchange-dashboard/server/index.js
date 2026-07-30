@@ -342,6 +342,12 @@ app.get('/api/shipments', async (req, res) => {
   return handler(req, res);
 });
 
+// 옛날 교환접수 히스토리(2024-05~2026-01)도 마찬가지로 재사용.
+app.get('/api/exchange-history', async (req, res) => {
+  const { default: handler } = await import('../api/exchange-history.js');
+  return handler(req, res);
+});
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });

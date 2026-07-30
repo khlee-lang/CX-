@@ -10,6 +10,9 @@ export const SHIPMENT_TABLE = '`verish-pm.cx.daily_channel_sku_stockout`';
 // 2026-07-29 강희님이 원본 CSV를 집계해 업로드. cx 데이터셋 단위 권한이라 SA가 바로 읽을 수 있음.
 export const HISTORICAL_SHIPMENT_TABLE = '`verish-pm.cx.daily_channel_sku_stockout_historical`';
 export const HISTORICAL_DATA_MIN_DATE = '2024-05-02';
+// 옛날 교환접수 시트(시트1/2/3) dedup 통합본, 2024-05-28~2026-01-06.
+// 개인정보(수령자/연락처/우편번호/주소)는 제외 — 2026-07-29 통합, 강희님 업로드.
+export const HISTORICAL_EXCHANGE_TABLE = '`verish-pm.cx.exchange_historical`';
 export const BQ_LOCATION = 'asia-northeast3';
 
 function getCreds() {

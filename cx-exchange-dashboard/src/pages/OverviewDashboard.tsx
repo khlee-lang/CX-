@@ -8,17 +8,29 @@ import { RateBadge } from '../components/ui/RateBadge';
 import { MatchCoverageChip } from '../components/ui/MatchCoverageChip';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useShipments } from '../hooks/useShipments';
-import { AXIS_PROPS, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_CURSOR, SERIES_COLORS, rateTooltipFormatter } from '../lib/chartTheme';
+import { useExchangeHistory } from '../hooks/useExchangeHistory';
+import { ControlChart } from '../components/ui/ControlChart';
+import { buildLiveDailyExchange } from '../lib/controlChart';
+import { AXIS_PROPS, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_CURSOR, SERIES_COLORS } from '../lib/chartTheme';
 import { computeRate, lookupProduct, buildMatchCoverage, isJasaScopedChannel } from '../lib/rate';
 import { shipStatus, isShipped, leadTimeDays, median, toISODate, needsRecovery, shippingFee, classifyDefect } from '../lib/exchange';
 import {
-  AreaChart, Area, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell
 } from 'recharts';
 
 export const OverviewDashboard: React.FC = () => {
   const { data, loading, reload, startDate, endDate, setStartDate, setEndDate, reloadKey } = useDashboardData('all');
-  const { shipments, index: shipIdx, failed: shipFailed } = useShipments(startDate, endDate, reloadKey);
+  const { index: shipIdx, failed: shipFailed } = useShipments(startDate, endDate, reloadKey);
+
+  // 관제 그래프용 — KPI 날짜 필터와 무관하게 항상 전체 히스토리(2024-05~현재)를 보여준다.
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const controlChartShip = useShipments('2024-05-02', todayStr, reloadKey);
+  const { exchangeHistory } = useExchangeHistory();
+  const liveDaily = useMemo(
+    () => buildLiveDailyExchange(data?.data.jasaMall || [], data?.data.oebuMall || []),
+    [data],
+  );
 
   // 직전 동일 기간 — 품질 급증 경보를 "건수 급증"이 아니라 "불량률 급증"으로 판단하려면
   // 직전 기간의 출고량(분모)도 필요하다. BQ 스캔량이 작아(수 MB) 추가 조회 비용은 무시할 수준.
@@ -285,29 +297,6 @@ export const OverviewDashboard: React.FC = () => {
     };
   }, [shipIdx, stats, productDefectTotal, topProducts, filteredData]);
 
-  // 출고량 vs 교환 이중축 — 자사몰+외부몰 접수 대 출고량 일별 비교 (3월 이전은 출고 데이터 없어 rate=null)
-  const dualAxisData = useMemo(() => {
-    if (!shipments || !startDate || !endDate) return [] as { date: string; exchanges: number; shipped: number | null; rate: number | null }[];
-    const exMap = new Map<string, number>();
-    [...filteredData.jasa, ...filteredData.oebu].forEach((r) => {
-      const d = r['접수일']?.replace(/\./g, '-');
-      if (d) exMap.set(d, (exMap.get(d) || 0) + 1);
-    });
-    const shipMap = new Map<string, number>();
-    shipments.byDay.forEach((r) => {
-      shipMap.set(r.date, (shipMap.get(r.date) || 0) + r.qty);
-    });
-    const arr: { date: string; exchanges: number; shipped: number | null; rate: number | null }[] = [];
-    for (let d = new Date(startDate); d <= new Date(endDate); d.setDate(d.getDate() + 1)) {
-      const key = d.toISOString().split('T')[0];
-      const exchanges = exMap.get(key) || 0;
-      const shipped = shipMap.has(key) ? shipMap.get(key)! : null;
-      const rate = shipped && shipped > 0 ? (exchanges / shipped) * 100 : null;
-      arr.push({ date: key.substring(5), exchanges, shipped, rate });
-    }
-    return arr;
-  }, [shipments, startDate, endDate, filteredData]);
-
   if (loading && !data) return (
     <div className="flex h-[80vh] items-center justify-center text-indigo-600 font-bold animate-pulse">
       심층 분석 데이터 집계 중...
@@ -527,26 +516,13 @@ export const OverviewDashboard: React.FC = () => {
          </div>
       </div>
 
-      {/* 출고량 vs 교환 이중축 — 3월 이전(출고 데이터 없음)은 rate 라인이 끊김 */}
-      {dualAxisData.length > 0 && (
-        <ChartCard
-          title="출고량 대비 교환율 추이"
-          subtitle="자사몰 + 외부몰 기준, 막대=출고량(좌축) · 선=교환율%(우축)"
-          height={280}
-        >
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={dualAxisData} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-              <CartesianGrid {...GRID_PROPS} />
-              <XAxis dataKey="date" {...AXIS_PROPS} interval={Math.max(0, Math.ceil(dualAxisData.length / 12) - 1)} />
-              <YAxis yAxisId="left" {...AXIS_PROPS} width={40} allowDecimals={false} />
-              <YAxis yAxisId="right" orientation="right" {...AXIS_PROPS} width={40} unit="%" />
-              <Tooltip cursor={TOOLTIP_CURSOR} contentStyle={TOOLTIP_STYLE} formatter={rateTooltipFormatter} />
-              <Bar yAxisId="left" dataKey="shipped" name="출고량" fill={SERIES_COLORS.shipped} radius={[4, 4, 0, 0]} />
-              <Line yAxisId="right" type="monotone" dataKey="rate" name="교환율(%)" stroke={SERIES_COLORS.jasa} strokeWidth={3} dot={false} connectNulls={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      )}
+      {/* 교환율 관제 그래프 — KPI 날짜 필터와 무관하게 2024-05~현재 전체 히스토리 +
+          과거 데이터(2024-07~2025-12)로 계산한 평균±2σ 밴드. 밴드 벗어나면 강조 표시. */}
+      <ControlChart
+        shipments={controlChartShip.shipments}
+        exchangeHistory={exchangeHistory}
+        liveDaily={liveDaily}
+      />
 
       {/* Analysis Widgets (Top Products & Aging) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-4">

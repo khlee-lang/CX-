@@ -522,6 +522,9 @@ export const OverviewDashboard: React.FC = () => {
         shipments={controlChartShip.shipments}
         exchangeHistory={exchangeHistory}
         liveDaily={liveDaily}
+        jasaRows={data?.data.jasaMall || []}
+        oebuRows={data?.data.oebuMall || []}
+        bulryangRows={data?.data.bulryang || []}
       />
 
       {/* Analysis Widgets (Top Products & Aging) */}

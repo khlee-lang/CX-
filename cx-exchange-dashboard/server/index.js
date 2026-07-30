@@ -348,6 +348,12 @@ app.get('/api/exchange-history', async (req, res) => {
   return handler(req, res);
 });
 
+// 관제 그래프 드릴다운(기간×채널그룹별 TOP 상품 + 불량 사유)도 마찬가지로 재사용.
+app.get('/api/exchange-history-detail', async (req, res) => {
+  const { default: handler } = await import('../api/exchange-history-detail.js');
+  return handler(req, res);
+});
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });

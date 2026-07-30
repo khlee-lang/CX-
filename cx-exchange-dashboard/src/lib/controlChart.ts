@@ -1,6 +1,7 @@
 import type { ExchangeHistoryData } from '../api/exchangeHistory';
 import type { ShipmentData } from '../api/shipments';
 import { isJasaScopedChannel } from './rate';
+import { toISODate, normalizeChannel } from './exchange';
 
 export type Granularity = 'day' | 'week' | 'month';
 export type ChannelGroup = 'jasa' | 'oebu';
@@ -68,6 +69,19 @@ const bucketOf = (date: string, granularity: Granularity): string => {
 
 const labelOf = (bucket: string, granularity: Granularity): string =>
   granularity === 'month' ? bucket : bucket.slice(5);
+
+/** 버킷 문자열(일/주/월) → 실제 캘린더 날짜 구간(양끝 포함). 드릴다운 조회 범위 계산용. */
+export const bucketDateRange = (bucket: string, granularity: Granularity): { start: string; end: string } => {
+  if (granularity === 'day') return { start: bucket, end: bucket };
+  if (granularity === 'week') {
+    const d = new Date(`${bucket}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 6);
+    return { start: bucket, end: d.toISOString().slice(0, 10) };
+  }
+  const [y, m] = bucket.split('-').map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return { start: `${bucket}-01`, end: `${bucket}-${String(lastDay).padStart(2, '0')}` };
+};
 
 /**
  * 채널그룹 하나(jasa|oebu)의 통합 시계열을 만든다.
@@ -137,4 +151,69 @@ export const computeBand = (series: RatePoint[]): Band | null => {
   const variance = rates.reduce((a, b) => a + (b - mean) ** 2, 0) / (rates.length - 1);
   const stdDev = Math.sqrt(variance);
   return { mean, stdDev, upper: mean + 2 * stdDev, lower: Math.max(0, mean - 2 * stdDev), sampleSize: rates.length };
+};
+
+export interface DrilldownResult {
+  range: { start: string; end: string };
+  channelGroup: ChannelGroup;
+  totalCount: number;
+  topProducts: { name: string; cnt: number }[];
+  reasonDistribution: { reason: string; cnt: number }[];
+}
+
+/**
+ * 관제 그래프 밴드초과 지점 드릴다운(라이브 구글시트 구간용).
+ * 교환건수 집계는 buildLiveDailyExchange와 동일하게 자사몰/외부몰 교환시트만 대상으로 한다
+ * (그래프에 찍히는 교환율 자체가 이 두 시트 기준이라 TOP 상품도 같은 기준이어야 앞뒤가 맞음).
+ * 불량 사유 분포는 참고 정보로 별도 시트([불량] 교환)에서 같은 기간·채널 기준으로 뽑는다.
+ */
+export const computeLiveDrilldown = (
+  jasaRows: Record<string, any>[],
+  oebuRows: Record<string, any>[],
+  bulryangRows: Record<string, any>[],
+  start: string,
+  end: string,
+  grp: ChannelGroup,
+): DrilldownResult => {
+  const inRange = (r: Record<string, any>): boolean => {
+    const d = toISODate(r['접수일']);
+    return d !== null && d >= start && d <= end;
+  };
+
+  const exchangeRows: Record<string, any>[] = [];
+  if (grp === 'jasa') {
+    jasaRows.filter(inRange).forEach((r) => exchangeRows.push(r));
+  }
+  oebuRows.filter(inRange).forEach((r) => {
+    const g: ChannelGroup = isJasaScopedChannel(r['채널명']) ? 'jasa' : 'oebu';
+    if (g === grp) exchangeRows.push(r);
+  });
+
+  const prodMap = new Map<string, number>();
+  exchangeRows.forEach((r) => {
+    const name = (r['상품명'] || '').trim();
+    if (!name) return;
+    prodMap.set(name, (prodMap.get(name) || 0) + 1);
+  });
+  const topProducts = [...prodMap.entries()]
+    .map(([name, cnt]) => ({ name, cnt }))
+    .sort((a, b) => b.cnt - a.cnt)
+    .slice(0, 5);
+
+  const bulryangInRange = bulryangRows.filter(inRange).filter((r) => {
+    const g: ChannelGroup = normalizeChannel(r['교환 형태 및 채널']) === '자사몰' ? 'jasa' : 'oebu';
+    return g === grp;
+  });
+  const reasonMap = new Map<string, number>();
+  bulryangInRange.forEach((r) => {
+    const reason = (r['불량 사유'] || '').trim();
+    if (!reason) return;
+    reasonMap.set(reason, (reasonMap.get(reason) || 0) + 1);
+  });
+  const reasonDistribution = [...reasonMap.entries()]
+    .map(([reason, cnt]) => ({ reason, cnt }))
+    .sort((a, b) => b.cnt - a.cnt)
+    .slice(0, 8);
+
+  return { range: { start, end }, channelGroup: grp, totalCount: exchangeRows.length, topProducts, reasonDistribution };
 };

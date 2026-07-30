@@ -8,6 +8,7 @@ import { AXIS_PROPS, GRID_PROPS, TOOLTIP_CURSOR, TOOLTIP_STYLE, SERIES_COLORS, r
 import { buildRateSeries, computeBand, BASELINE_START, type Granularity, type ChannelGroup, type RatePoint } from '../../lib/controlChart';
 import type { ShipmentData } from '../../api/shipments';
 import type { ExchangeHistoryData } from '../../api/exchangeHistory';
+import { ControlChartDrilldown, type DrilldownTarget } from './ControlChartDrilldown';
 
 const GRANULARITY_LABEL: Record<Granularity, string> = { day: '일간', week: '주간', month: '월간' };
 
@@ -23,6 +24,10 @@ export interface ControlChartProps {
   liveDaily: Map<string, Record<ChannelGroup, { exchangeCnt: number; defectCnt: number }>>;
   series?: SeriesConfig[];
   defaultGranularity?: Granularity;
+  /** 밴드초과 지점 클릭 시 드릴다운 모달에 쓸 원본 행 데이터 (없으면 클릭 비활성화) */
+  jasaRows?: Record<string, any>[];
+  oebuRows?: Record<string, any>[];
+  bulryangRows?: Record<string, any>[];
 }
 
 const DEFAULT_SERIES: SeriesConfig[] = [
@@ -43,8 +48,13 @@ export const ControlChart: React.FC<ControlChartProps> = ({
   liveDaily,
   series = DEFAULT_SERIES,
   defaultGranularity = 'week',
+  jasaRows,
+  oebuRows,
+  bulryangRows,
 }) => {
   const [granularity, setGranularity] = useState<Granularity>(defaultGranularity);
+  const [drilldownTarget, setDrilldownTarget] = useState<DrilldownTarget | null>(null);
+  const canDrilldown = !!(jasaRows && oebuRows && bulryangRows);
 
   const perChannel = useMemo(() => {
     const weekly = new Map<ChannelGroup, RatePoint[]>();
@@ -93,7 +103,11 @@ export const ControlChart: React.FC<ControlChartProps> = ({
   return (
     <ChartCard
       title="교환율 관제 그래프"
-      subtitle="점선=과거 데이터 기준 평균±2σ 밴드(2024-07~2025-12 76주 기준). 밴드를 벗어나면 점으로 강조됩니다."
+      subtitle={
+        canDrilldown
+          ? '점선=과거 데이터 기준 평균±2σ 밴드(2024-07~2025-12 76주 기준). 밴드를 벗어나면 점으로 강조되며, 클릭하면 상세를 볼 수 있습니다.'
+          : '점선=과거 데이터 기준 평균±2σ 밴드(2024-07~2025-12 76주 기준). 밴드를 벗어나면 점으로 강조됩니다.'
+      }
       actions={
         <div className="flex gap-1">
           {(['day', 'week', 'month'] as Granularity[]).map((g) => (
@@ -167,8 +181,30 @@ export const ControlChart: React.FC<ControlChartProps> = ({
               // null 값도 0 위치에 점을 찍어버리는 문제가 있어 커스텀 렌더로 방지.
               dot={(props: any) => {
                 const { cx, cy, payload, key } = props;
-                if (payload?.[`${s.key}_exceeds`] == null) return <React.Fragment key={key} />;
-                return <circle key={key} cx={cx} cy={cy} r={5} fill="#ef4444" stroke="#fff" strokeWidth={2} />;
+                const rate = payload?.[`${s.key}_exceeds`];
+                if (rate == null) return <React.Fragment key={key} />;
+                return (
+                  <circle
+                    key={key}
+                    cx={cx}
+                    cy={cy}
+                    r={5}
+                    fill="#ef4444"
+                    stroke="#fff"
+                    strokeWidth={2}
+                    style={{ cursor: canDrilldown ? 'pointer' : 'default' }}
+                    onClick={() => {
+                      if (!canDrilldown) return;
+                      setDrilldownTarget({
+                        bucket: payload.bucket,
+                        granularity,
+                        channelGroup: s.key,
+                        channelLabel: s.label,
+                        rate,
+                      });
+                    }}
+                  />
+                );
               }}
               connectNulls={false}
               legendType="none"
@@ -192,6 +228,16 @@ export const ControlChart: React.FC<ControlChartProps> = ({
           );
         })}
       </div>
+      {drilldownTarget && canDrilldown && (
+        <ControlChartDrilldown
+          target={drilldownTarget}
+          jasaRows={jasaRows!}
+          oebuRows={oebuRows!}
+          bulryangRows={bulryangRows!}
+          exchangeHistory={exchangeHistory}
+          onClose={() => setDrilldownTarget(null)}
+        />
+      )}
     </ChartCard>
   );
 };

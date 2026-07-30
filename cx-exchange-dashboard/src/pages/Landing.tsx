@@ -15,6 +15,9 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Studio' },
   { label: 'Insights' },
   { label: 'CX 대시보드', to: '/dashboard' },
+  { label: '미희' },
+  { label: '나연' },
+  { label: '한슬' },
 ];
 
 const MOBILE_ITEMS: NavItem[] = [...NAV_ITEMS, { label: 'Reach Out' }];
@@ -40,7 +43,7 @@ export const Landing: React.FC = () => {
         <header className="flex items-center justify-between px-6 md:px-12 lg:px-16 py-5 md:py-6">
           <div className="flex items-center gap-10">
             <span className="text-white font-semibold text-lg tracking-tight font-sans">Atelier</span>
-            <nav className="hidden md:flex items-center gap-8">
+            <nav className="hidden lg:flex items-center gap-6 whitespace-nowrap">
               {NAV_ITEMS.map((item) =>
                 item.to ? (
                   <Link
@@ -66,13 +69,13 @@ export const Landing: React.FC = () => {
           <div className="flex items-center gap-6">
             <a
               href="#"
-              className="hidden md:inline text-white/80 hover:text-white text-sm font-light transition-colors duration-200"
+              className="hidden lg:inline text-white/80 hover:text-white text-sm font-light transition-colors duration-200"
             >
               Reach Out
             </a>
             <Link
               to="/dashboard"
-              className="hidden md:inline-block bg-white text-black rounded-full px-5 py-2 text-sm font-medium hover:bg-white/90 transition-colors duration-200"
+              className="hidden lg:inline-block bg-white text-black rounded-full px-5 py-2 text-sm font-medium hover:bg-white/90 transition-colors duration-200"
             >
               Let&apos;s Talk
             </Link>
@@ -82,7 +85,7 @@ export const Landing: React.FC = () => {
               type="button"
               aria-label="메뉴 열기"
               onClick={() => setMenuOpen(true)}
-              className="md:hidden flex flex-col items-end justify-center gap-1.5 w-8 h-8"
+              className="lg:hidden flex flex-col items-end justify-center gap-1.5 w-8 h-8"
             >
               <span
                 className={`block h-[2px] w-6 bg-white rounded-full transition-transform duration-500 ${
@@ -142,7 +145,7 @@ export const Landing: React.FC = () => {
       </div>
 
       {/* Mobile menu overlay */}
-      <div className={`fixed inset-0 z-50 md:hidden ${menuOpen ? '' : 'pointer-events-none'}`}>
+      <div className={`fixed inset-0 z-50 lg:hidden ${menuOpen ? '' : 'pointer-events-none'}`}>
         <div
           className={`absolute inset-0 bg-black/90 backdrop-blur-xl transition-opacity duration-700 ${
             menuOpen ? 'opacity-100' : 'opacity-0'

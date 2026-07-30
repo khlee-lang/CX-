@@ -7,9 +7,14 @@ import { RateBadge } from '../components/ui/RateBadge';
 import { MatchCoverageChip } from '../components/ui/MatchCoverageChip';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useShipments } from '../hooks/useShipments';
+import { useExchangeHistory } from '../hooks/useExchangeHistory';
+import { ControlChart } from '../components/ui/ControlChart';
+import { buildLiveDailyExchange } from '../lib/controlChart';
 import { AXIS_PROPS, GRID_PROPS, SERIES_COLORS } from '../lib/chartTheme';
 import { isShipped, leadTimeDays, median, normalizeChannel } from '../lib/exchange';
 import { computeRate, lookupChannel, buildMatchCoverage, rateBand, RATE_BANDS, isJasaScopedChannel } from '../lib/rate';
+
+const OEBU_ONLY_SERIES = [{ key: 'oebu' as const, label: '외부몰', color: SERIES_COLORS.oebu }];
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
   PieChart, Pie
@@ -35,6 +40,14 @@ interface ChannelStat {
 export const OebuMallExchange: React.FC = () => {
   const { data: exchangeData, loading, reload, startDate, endDate, setStartDate, setEndDate, reloadKey } = useDashboardData('oebuMall');
   const { index: shipIdx, failed: shipFailed } = useShipments(startDate, endDate, reloadKey);
+  // 관제 그래프용 — KPI 날짜 필터와 무관하게 항상 전체 히스토리(2024-05~현재)를 보여준다(종합 대시보드와 동일 패턴).
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const controlChartShip = useShipments('2024-05-02', todayStr, reloadKey);
+  const { exchangeHistory } = useExchangeHistory();
+  const liveDaily = useMemo(
+    () => buildLiveDailyExchange(exchangeData?.data.jasaMall || [], exchangeData?.data.oebuMall || []),
+    [exchangeData],
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
 
@@ -259,6 +272,18 @@ export const OebuMallExchange: React.FC = () => {
             <Icon name={stats.mom >= 0 ? 'trending_up' : 'trending_down'} className="text-3xl opacity-20" />
          </div>
       </div>
+
+      {/* 교환율 관제 그래프 — 종합 대시보드와 같은 평균±2σ 밴드 기반 장기 추이,
+          이 페이지는 외부몰 시리즈만 보여준다(2026-07-30 신규 추가). */}
+      <ControlChart
+        shipments={controlChartShip.shipments}
+        exchangeHistory={exchangeHistory}
+        liveDaily={liveDaily}
+        series={OEBU_ONLY_SERIES}
+        jasaRows={exchangeData?.data.jasaMall || []}
+        oebuRows={exchangeData?.data.oebuMall || []}
+        bulryangRows={exchangeData?.data.bulryang || []}
+      />
 
       {/* 채널별 교환율 비교 — 어느 채널이 문제인지 즉답 */}
       {channelRateChart.length > 0 && (

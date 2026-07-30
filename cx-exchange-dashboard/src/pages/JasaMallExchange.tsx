@@ -2,18 +2,21 @@ import React, { useState, useMemo } from 'react';
 import { Icon } from '../components/ui/Icon';
 import { DateFilter } from '../components/ui/DateFilter';
 import { KpiCard } from '../components/ui/KpiCard';
-import { ChartCard } from '../components/ui/ChartCard';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { RateBadge } from '../components/ui/RateBadge';
 import { MatchCoverageChip } from '../components/ui/MatchCoverageChip';
 import { MinShipmentFilter } from '../components/ui/MinShipmentFilter';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useShipments } from '../hooks/useShipments';
+import { useExchangeHistory } from '../hooks/useExchangeHistory';
 import { useStickyState } from '../hooks/useStickyState';
-import { AXIS_PROPS, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_CURSOR, SERIES_COLORS, rateTooltipFormatter } from '../lib/chartTheme';
+import { ControlChart } from '../components/ui/ControlChart';
+import { buildLiveDailyExchange } from '../lib/controlChart';
+import { SERIES_COLORS } from '../lib/chartTheme';
 import { isShipped, swapDirection, shippingFee as parseFee, type SwapDirection } from '../lib/exchange';
 import { computeRate, lookupProduct, buildMatchCoverage, MIN_SHIPPED_DEFAULT, isJasaScopedChannel } from '../lib/rate';
-import { ComposedChart, Area, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+const JASA_ONLY_SERIES = [{ key: 'jasa' as const, label: '자사몰', color: SERIES_COLORS.jasa }];
 
 interface SwapRateRow {
   name: string;
@@ -24,15 +27,22 @@ interface SwapRateRow {
 
 export const JasaMallExchange: React.FC = () => {
   const { data: exchangeData, loading, reload, startDate, endDate, setStartDate, setEndDate, reloadKey } = useDashboardData('jasaMall');
-  const { shipments, index: shipIdx, failed: shipFailed } = useShipments(startDate, endDate, reloadKey);
+  const { index: shipIdx, failed: shipFailed } = useShipments(startDate, endDate, reloadKey);
+  // 관제 그래프용 — KPI 날짜 필터와 무관하게 항상 전체 히스토리(2024-05~현재)를 보여준다(종합 대시보드와 동일 패턴).
+  const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const controlChartShip = useShipments('2024-05-02', todayStr, reloadKey);
+  const { exchangeHistory } = useExchangeHistory();
+  const liveDaily = useMemo(
+    () => buildLiveDailyExchange(exchangeData?.data.jasaMall || [], exchangeData?.data.oebuMall || []),
+    [exchangeData],
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
   // 상품 레벨 최소 출고량은 불량 페이지와 같은 키로 공유 — 페이지를 옮겨도 기준이 유지되도록
   const [minShipped, setMinShipped] = useStickyState('cx.minShipped.product', MIN_SHIPPED_DEFAULT);
 
-  const { chartData, stats, topItems, optionAnalyses, productList, swapStats, sizeUpMap, sizeDownMap, jasaRows } = useMemo(() => {
+  const { stats, topItems, optionAnalyses, productList, swapStats, sizeUpMap, sizeDownMap, jasaRows } = useMemo(() => {
     if (!exchangeData?.data.jasaMall) return {
-      chartData: [] as { date: string; count: number }[],
       stats: { total: 0, done: 0, mom: 0, freeRate: 0, preExchangeRate: 0, shippingFee: 0 },
       topItems: [], optionAnalyses: [], productList: [],
       swapStats: { sizeUp: 0, sizeDown: 0, colorOnly: 0, same: 0, both: 0, topSizeUp: [] as { name: string; count: number }[], topSizeDown: [] as { name: string; count: number }[] },
@@ -55,7 +65,6 @@ export const JasaMallExchange: React.FC = () => {
       return d && d >= psStr && d <= peStr;
     }).length;
 
-    const dailyMap: Record<string, number> = {};
     const itemMap: Record<string, number> = {};
     const allProducts = new Set<string>();
     let done = 0, free = 0, pre = 0, fee = 0;
@@ -66,8 +75,6 @@ export const JasaMallExchange: React.FC = () => {
     const sizeDownMap: Record<string, number> = {};
 
     filtered.forEach(row => {
-      const d = row['접수일']?.replace(/\./g, '-');
-      if (d) dailyMap[d] = (dailyMap[d] || 0) + 1;
       if (isShipped(row)) done++;
       if (row['첫주문여부[자동]'] === '무료교환') free++;
       if ((row['교환형태'] || '').includes('선교환')) pre++;
@@ -86,14 +93,6 @@ export const JasaMallExchange: React.FC = () => {
     const topOf = (m: Record<string, number>) => Object.entries(m)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count).slice(0, 5);
-
-    // 접수가 없는 날짜도 0으로 채운다 — 예전엔 있는 날짜만 MM-DD 문자열로 정렬해서
-    // 주말 등 공백일이 빠지며 그래프가 듬성듬성 이어져 보였고, 연말/연초에 정렬도 틀렸음
-    const chartArr: { date: string; count: number }[] = [];
-    for (let d = new Date(startDate); d <= eDate; d.setDate(d.getDate() + 1)) {
-      const key = d.toISOString().split('T')[0];
-      chartArr.push({ date: key.substring(5), count: dailyMap[key] || 0 });
-    }
 
     const topArr = Object.entries(itemMap)
       .map(([name, count]) => ({ name, count }))
@@ -120,7 +119,6 @@ export const JasaMallExchange: React.FC = () => {
 
     const total = filtered.length;
     return {
-      chartData: chartArr,
       stats: {
         total, done,
         mom: prevCount > 0 ? Math.round(((total - prevCount) / prevCount) * 100) : 0,
@@ -174,24 +172,6 @@ export const JasaMallExchange: React.FC = () => {
   }, [shipIdx, stats, npayCount, sizeUpMap, sizeDownMap, jasaRows, minShipped]);
 
   // 출고량 vs 교환 이중축 데이터 (자사몰만)
-  const dualAxisData = useMemo(() => {
-    if (!shipments || !startDate || !endDate) return [];
-    const shipMap = new Map<string, number>();
-    shipments.byDay.filter((r) => r.channelGroup === 'jasa').forEach((r) => {
-      shipMap.set(r.date, (shipMap.get(r.date) || 0) + r.qty);
-    });
-    return chartData.map((c) => {
-      const fullDate = `${startDate.substring(0, 4)}-${c.date}`;
-      const shipped = shipMap.has(fullDate) ? shipMap.get(fullDate)! : null;
-      return {
-        date: c.date,
-        count: c.count,
-        shipped,
-        rate: shipped && shipped > 0 ? (c.count / shipped) * 100 : null,
-      };
-    });
-  }, [shipments, chartData, startDate, endDate]);
-
   if (loading && !exchangeData) return (
     <div className="flex h-[80vh] items-center justify-center text-indigo-600 font-black animate-pulse">자사몰 교환 엔진 최적화 중...</div>
   );
@@ -256,30 +236,20 @@ export const JasaMallExchange: React.FC = () => {
            </div>
         </div>
 
-        <ChartCard
-          className="lg:col-span-3"
-          title="자사몰 교환 접수 추이"
-          subtitle="막대=출고량(좌축) · 영역=접수건수(좌축) · 선=교환율%(우축)"
-          height={300}
-        >
-           <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={dualAxisData.length > 0 ? dualAxisData : chartData}>
-                 <defs>
-                   <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
-                     <stop offset="5%" stopColor={SERIES_COLORS.jasa} stopOpacity={0.15}/><stop offset="95%" stopColor={SERIES_COLORS.jasa} stopOpacity={0}/>
-                   </linearGradient>
-                 </defs>
-                 <CartesianGrid {...GRID_PROPS} />
-                 <XAxis dataKey="date" {...AXIS_PROPS} interval={Math.max(0, Math.ceil(chartData.length / 12) - 1)} />
-                 <YAxis yAxisId="left" {...AXIS_PROPS} />
-                 <YAxis yAxisId="right" orientation="right" {...AXIS_PROPS} unit="%" />
-                 <Tooltip cursor={TOOLTIP_CURSOR} contentStyle={TOOLTIP_STYLE} formatter={rateTooltipFormatter} />
-                 <Bar yAxisId="left" dataKey="shipped" name="출고량" fill={SERIES_COLORS.shipped} radius={[4, 4, 0, 0]} />
-                 <Area yAxisId="left" type="monotone" dataKey="count" name="접수건수" stroke={SERIES_COLORS.jasa} strokeWidth={3} fill="url(#colorCount)" dot={false} />
-                 <Line yAxisId="right" type="monotone" dataKey="rate" name="교환율(%)" stroke="#4338ca" strokeWidth={2} dot={false} connectNulls={false} />
-              </ComposedChart>
-           </ResponsiveContainer>
-        </ChartCard>
+        {/* 관제 그래프로 대체(2026-07-30) — 예전엔 KPI 날짜 필터 범위만 보여주는 단기
+            이중축 차트(출고량/접수건수/교환율)였는데, 종합 대시보드와 같은 평균±2σ
+            밴드 기반 장기 추이로 통일. 이 페이지는 항상 자사몰 시리즈만 보여준다. */}
+        <div className="lg:col-span-3">
+          <ControlChart
+            shipments={controlChartShip.shipments}
+            exchangeHistory={exchangeHistory}
+            liveDaily={liveDaily}
+            series={JASA_ONLY_SERIES}
+            jasaRows={exchangeData?.data.jasaMall || []}
+            oebuRows={exchangeData?.data.oebuMall || []}
+            bulryangRows={exchangeData?.data.bulryang || []}
+          />
+        </div>
       </div>
 
       {/* 정책/비용 지표 — CS비용·배송비 정책 판단용 */}

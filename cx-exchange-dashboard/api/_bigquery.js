@@ -13,6 +13,8 @@ export const HISTORICAL_DATA_MIN_DATE = '2024-05-02';
 // 옛날 교환접수 시트(시트1/2/3) dedup 통합본, 2024-05-28~2026-01-06.
 // 개인정보(수령자/연락처/우편번호/주소)는 제외 — 2026-07-29 통합, 강희님 업로드.
 export const HISTORICAL_EXCHANGE_TABLE = '`verish-pm.cx.exchange_historical`';
+// 관제 그래프 밴드초과 이벤트 로그(사용자가 드릴다운에서 수동으로 "기록"한 것만 저장) — 2026-07-30 생성.
+export const ANOMALY_EVENTS_TABLE = '`verish-pm.cx.exchange_anomaly_events`';
 export const BQ_LOCATION = 'asia-northeast3';
 
 function getCreds() {

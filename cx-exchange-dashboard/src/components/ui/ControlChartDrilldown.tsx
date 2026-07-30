@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Icon } from './Icon';
 import { bucketDateRange, computeLiveDrilldown, type Granularity, type ChannelGroup } from '../../lib/controlChart';
 import { fetchExchangeHistoryDetail, type ExchangeHistoryDetail } from '../../api/exchangeHistoryDetail';
+import { createAnomalyEvent } from '../../api/anomalyLog';
 import type { ExchangeHistoryData } from '../../api/exchangeHistory';
 
 export interface DrilldownTarget {
@@ -10,6 +11,7 @@ export interface DrilldownTarget {
   channelGroup: ChannelGroup;
   channelLabel: string;
   rate: number;
+  band: { mean: number; upper: number; lower: number } | null;
 }
 
 interface MergedDetail {
@@ -60,8 +62,36 @@ export const ControlChartDrilldown: React.FC<ControlChartDrilldownProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<MergedDetail | null>(null);
+  const [memo, setMemo] = useState('');
+  const [recording, setRecording] = useState(false);
+  const [recorded, setRecorded] = useState(false);
+  const [recordError, setRecordError] = useState<string | null>(null);
 
   const { start, end } = bucketDateRange(target.bucket, target.granularity);
+
+  const handleRecord = async () => {
+    if (!memo.trim() || recording || recorded) return;
+    setRecording(true);
+    setRecordError(null);
+    try {
+      await createAnomalyEvent({
+        bucketStart: start,
+        bucketEnd: end,
+        granularity: target.granularity,
+        channelGroup: target.channelGroup,
+        rate: target.rate,
+        bandMean: target.band?.mean ?? null,
+        bandUpper: target.band?.upper ?? null,
+        bandLower: target.band?.lower ?? null,
+        memo,
+      });
+      setRecorded(true);
+    } catch (err: any) {
+      setRecordError(err.message || '기록 중 오류가 발생했습니다.');
+    } finally {
+      setRecording(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -168,6 +198,34 @@ export const ControlChartDrilldown: React.FC<ControlChartDrilldownProps> = ({
                       </div>
                     ))}
                   </div>
+                )}
+              </div>
+
+              <div className="border-t border-slate-200 pt-4">
+                <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2">이상 이벤트로 기록</p>
+                {recorded ? (
+                  <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 rounded-2xl p-3">
+                    <Icon name="check_circle" className="text-lg" />
+                    <span className="text-sm font-bold">기록 완료 — 이상 이벤트 로그에 저장됐습니다.</span>
+                  </div>
+                ) : (
+                  <>
+                    <textarea
+                      value={memo}
+                      onChange={(e) => setMemo(e.target.value)}
+                      placeholder="이 시점에 교환율이 급증/급감한 원인을 메모로 남겨두세요 (예: 프로모션으로 접수 처리가 밀렸다가 한꺼번에 입력됨)"
+                      className="w-full text-sm rounded-2xl border border-slate-200 p-3 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                      rows={3}
+                    />
+                    {recordError && <p className="text-xs text-rose-500 font-bold mt-1">{recordError}</p>}
+                    <button
+                      onClick={handleRecord}
+                      disabled={!memo.trim() || recording}
+                      className="mt-2 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-black disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-700 transition-colors"
+                    >
+                      {recording ? '기록 중...' : '기록'}
+                    </button>
+                  </>
                 )}
               </div>
             </div>

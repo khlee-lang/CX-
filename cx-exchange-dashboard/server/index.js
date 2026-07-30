@@ -354,6 +354,16 @@ app.get('/api/exchange-history-detail', async (req, res) => {
   return handler(req, res);
 });
 
+// 관제 그래프 밴드초과 이벤트 로그(조회/기록)도 마찬가지로 재사용.
+app.get('/api/exchange-anomaly', async (req, res) => {
+  const { default: handler } = await import('../api/exchange-anomaly.js');
+  return handler(req, res);
+});
+app.post('/api/exchange-anomaly', async (req, res) => {
+  const { default: handler } = await import('../api/exchange-anomaly.js');
+  return handler(req, res);
+});
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });

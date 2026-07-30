@@ -10,6 +10,7 @@ import { useDashboardData } from '../hooks/useDashboardData';
 import { useShipments } from '../hooks/useShipments';
 import { useExchangeHistory } from '../hooks/useExchangeHistory';
 import { ControlChart } from '../components/ui/ControlChart';
+import { AnomalyLogPanel } from '../components/ui/AnomalyLogPanel';
 import { buildLiveDailyExchange } from '../lib/controlChart';
 import { AXIS_PROPS, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_CURSOR, SERIES_COLORS } from '../lib/chartTheme';
 import { computeRate, lookupProduct, buildMatchCoverage, isJasaScopedChannel } from '../lib/rate';
@@ -526,6 +527,10 @@ export const OverviewDashboard: React.FC = () => {
         oebuRows={data?.data.oebuMall || []}
         bulryangRows={data?.data.bulryang || []}
       />
+
+      <div className="mt-8">
+        <AnomalyLogPanel />
+      </div>
 
       {/* Analysis Widgets (Top Products & Aging) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-4">

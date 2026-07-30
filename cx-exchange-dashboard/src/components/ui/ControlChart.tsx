@@ -195,12 +195,14 @@ export const ControlChart: React.FC<ControlChartProps> = ({
                     style={{ cursor: canDrilldown ? 'pointer' : 'default' }}
                     onClick={() => {
                       if (!canDrilldown) return;
+                      const band = bands.get(s.key);
                       setDrilldownTarget({
                         bucket: payload.bucket,
                         granularity,
                         channelGroup: s.key,
                         channelLabel: s.label,
                         rate,
+                        band: band ? { mean: band.mean, upper: band.upper, lower: band.lower } : null,
                       });
                     }}
                   />

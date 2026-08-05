@@ -6,7 +6,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { RateBadge } from '../components/ui/RateBadge';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useShipments } from '../hooks/useShipments';
-import { FeedbackProvider, FeedbackSection, FeedbackButton } from '../components/feedback/FeedbackSystem';
+import { FeedbackProvider, FeedbackSection, FeedbackButton, FeedbackAddSectionTarget } from '../components/feedback/FeedbackSystem';
 import { fetchShipments, type ShipmentData } from '../api/shipments';
 import { isJasaScopedChannel, lookupProduct } from '../lib/rate';
 import { toISODate } from '../lib/exchange';
@@ -642,6 +642,9 @@ export const SalesView: React.FC = () => {
           )}
         </div>
         </FeedbackSection>
+
+        {/* 선택 모드에서만 보이는 "+ 섹션 추가 제안" 타겟 */}
+        <FeedbackAddSectionTarget />
 
         <p className="text-[11px] font-bold text-slate-400">
           집계 기준: 접수일 · 주 시작 = 월요일 · 교환율 = 교환건수 ÷ 자사몰(카페24) 주간 출고량 · 교환 데이터 시작 2026-05-04 (라이브 시트)

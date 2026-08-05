@@ -139,6 +139,20 @@ export default async function handler(req, res) {
       return res.json({ ok: true });
     }
 
+    if (action === 'delete') {
+      const { requestId } = body;
+      if (!admin) return res.status(403).json({ error: '삭제는 관리자만 가능합니다.' });
+      if (!requestId) return res.status(400).json({ error: '요청ID가 필요합니다.' });
+      const [reqRows, msgRows] = await Promise.all([reqSheet.getRows(), msgSheet.getRows()]);
+      const target = reqRows.find((r) => r.get('ID') === requestId);
+      if (!target) return res.status(404).json({ error: '해당 요청을 찾을 수 없습니다.' });
+      // 메시지를 역순으로 지워야 행 인덱스가 밀려도 안전하다
+      const targetMsgs = msgRows.filter((m) => m.get('요청ID') === requestId).reverse();
+      for (const m of targetMsgs) await m.delete();
+      await target.delete();
+      return res.json({ ok: true, deletedMessages: targetMsgs.length });
+    }
+
     return res.status(400).json({ error: `알 수 없는 action: ${action}` });
   } catch (err) {
     console.error('[feedback] error:', err);

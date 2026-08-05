@@ -13,6 +13,7 @@ import {
   createFeedbackRequest,
   sendFeedbackMessage,
   changeFeedbackStatus,
+  deleteFeedbackRequest,
   verifyAdminKey,
   FEEDBACK_STATUSES,
   FEEDBACK_TAGS,
@@ -27,6 +28,9 @@ const ADMIN_KEY_KEY = 'cx.feedback.adminKey';
 const PAGE = '/sales';
 // 관리자 모드에서 보내는 모든 메시지는 이 이름으로 고정된다 (강희님 확정).
 const ADMIN_NAME = '이강희';
+// 화면 섹션에 묶이지 않는 특수 "섹션" 값 — 시트 스키마는 그대로 두고 섹션 열 값으로만 구분한다.
+export const SECTION_GENERAL = '일반 요청';
+export const SECTION_NEW_PROPOSAL = '신규 섹션 제안';
 
 const STATUS_STYLE: Record<FeedbackStatus, string> = {
   요청중: 'bg-indigo-50 text-indigo-600',
@@ -69,6 +73,22 @@ export const FeedbackSection: React.FC<{ label: string; children: React.ReactNod
         </button>
       )}
     </div>
+  );
+};
+
+// ── 신규 섹션 제안 타겟 — 선택 모드에서 페이지 맨 아래에 나타나는 "+ 섹션 추가" ──
+export const FeedbackAddSectionTarget: React.FC = () => {
+  const { selectMode, pickSection } = useFeedback();
+  if (!selectMode) return null;
+  return (
+    <button
+      onClick={() => pickSection(SECTION_NEW_PROPOSAL)}
+      className="w-full z-40 rounded-[32px] border-2 border-dashed border-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/15 transition-colors py-8 flex flex-col items-center gap-1"
+    >
+      <span className="text-2xl font-black text-emerald-500 leading-none">+</span>
+      <span className="text-xs font-black text-emerald-600">섹션 추가 제안</span>
+      <span className="text-[11px] font-bold text-slate-400">"이런 섹션이 추가됐으면 좋겠어요"를 여기서 작성하세요</span>
+    </button>
   );
 };
 
@@ -158,6 +178,12 @@ export const FeedbackProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         <div className="fixed top-0 inset-x-0 z-50 flex justify-center pt-4 pointer-events-none">
           <div className="pointer-events-auto flex items-center gap-3 bg-slate-900 text-white rounded-2xl px-5 py-3 shadow-2xl">
             <span className="text-xs font-black">수정을 요청할 섹션을 클릭하세요</span>
+            <button
+              onClick={() => { setSelectMode(false); setDraftSection(SECTION_GENERAL); }}
+              className="text-[11px] font-black bg-white/10 hover:bg-white/20 rounded-lg px-2.5 py-1 transition-colors"
+            >
+              섹션 없이 작성
+            </button>
             <button onClick={() => setSelectMode(false)} className="text-[11px] font-black text-slate-400 hover:text-white transition-colors">
               취소 (ESC)
             </button>
@@ -231,15 +257,31 @@ const CreateModal: React.FC<{
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
       <div className="bg-white rounded-[28px] shadow-2xl w-full max-w-[480px] p-7" onClick={(e) => e.stopPropagation()}>
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">새 수정 요청</p>
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+          {section === SECTION_NEW_PROPOSAL ? '섹션 추가 제안' : '새 수정 요청'}
+        </p>
         <h3 className="text-lg font-black text-slate-900 mb-5">
-          <span className="text-indigo-600">{section}</span> 섹션
+          {section === SECTION_NEW_PROPOSAL ? (
+            <span className="text-emerald-600">이런 섹션이 추가됐으면 좋겠어요</span>
+          ) : section === SECTION_GENERAL ? (
+            <span className="text-indigo-600">일반 요청</span>
+          ) : (
+            <>
+              <span className="text-indigo-600">{section}</span> 섹션
+            </>
+          )}
         </h3>
         <textarea
           autoFocus
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="이 섹션을 이렇게 수정해주세요..."
+          placeholder={
+            section === SECTION_NEW_PROPOSAL
+              ? '어떤 데이터를 어떤 형태로 보고 싶은지 적어주세요 (예: 색상별 교환율 순위가 보이는 섹션이 있으면 좋겠어요)'
+              : section === SECTION_GENERAL
+                ? '특정 섹션과 무관한 요청·의견·질문을 자유롭게 적어주세요...'
+                : '이 섹션을 이렇게 수정해주세요...'
+          }
           rows={5}
           className="w-full border border-slate-200 rounded-2xl p-4 text-sm font-medium focus:outline-none focus:border-indigo-400 resize-none"
         />
@@ -323,6 +365,7 @@ const Drawer: React.FC<{
             adminKey={p.adminKey}
             onSaveAdminKey={p.onSaveAdminKey}
             setIsAdmin={p.setIsAdmin}
+            reload={p.reload}
           />
         )}
       </div>
@@ -341,6 +384,7 @@ const RequestList: React.FC<{
   adminKey: string;
   onSaveAdminKey: (v: string) => void;
   setIsAdmin: (v: boolean) => void;
+  reload: () => Promise<void>;
 }> = (p) => {
   const [keyDraft, setKeyDraft] = useState('');
   const [keyOpen, setKeyOpen] = useState(false);
@@ -348,6 +392,17 @@ const RequestList: React.FC<{
   const [busy, setBusy] = useState(false);
   const [statusFilter, setStatusFilter] = useState<FeedbackStatus | '전체'>('전체');
   const [authorFilter, setAuthorFilter] = useState<string>('전체');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const remove = async (r: FeedbackRequest) => {
+    if (deletingId) return;
+    if (!window.confirm(`"${r.section}" 요청과 대화 내용을 모두 삭제할까요?\n삭제하면 되돌릴 수 없습니다.`)) return;
+    setDeletingId(r.id);
+    const res = await deleteFeedbackRequest({ requestId: r.id, adminKey: p.adminKey });
+    setDeletingId(null);
+    if (!res.ok) { window.alert(res.error || '삭제에 실패했습니다.'); return; }
+    await p.reload();
+  };
 
   const lastMsgOf = (id: string) => {
     const list = p.messages.filter((m) => m.requestId === id && m.role !== 'system');
@@ -443,20 +498,31 @@ const RequestList: React.FC<{
           <p className="p-6 text-xs font-bold text-slate-400 text-center">조건에 맞는 요청이 없습니다.</p>
         )}
         {filtered.map((r) => (
-          <button
+          <div
             key={r.id}
             onClick={() => p.onSelect(r.id)}
-            className="w-full text-left px-6 py-4 border-b border-slate-50 hover:bg-slate-50 transition-colors"
+            className={`px-6 py-4 border-b border-slate-50 hover:bg-slate-50 transition-colors cursor-pointer ${deletingId === r.id ? 'opacity-40 pointer-events-none' : ''}`}
           >
             <div className="flex items-center justify-between gap-2 mb-1">
               <span className="text-xs font-black text-slate-800">{r.section}</span>
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded-lg shrink-0 ${STATUS_STYLE[r.status] ?? 'bg-slate-100 text-slate-500'}`}>
-                {r.status}
+              <span className="flex items-center gap-1.5 shrink-0">
+                <span className={`text-[10px] font-black px-2 py-0.5 rounded-lg ${STATUS_STYLE[r.status] ?? 'bg-slate-100 text-slate-500'}`}>
+                  {r.status}
+                </span>
+                {p.isAdmin && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); void remove(r); }}
+                    title="요청과 대화 전체 삭제 (관리자)"
+                    className="p-1 text-slate-300 hover:text-rose-500 transition-colors"
+                  >
+                    <Icon name="delete" className="text-sm leading-none" />
+                  </button>
+                )}
               </span>
             </div>
             <p className="text-[11px] font-medium text-slate-500 truncate">{lastMsgOf(r.id) || '(내용 없음)'}</p>
             <p className="text-[10px] font-bold text-slate-300 mt-1">{r.author} · {r.updatedAt}</p>
-          </button>
+          </div>
         ))}
       </div>
 

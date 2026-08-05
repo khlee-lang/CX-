@@ -68,6 +68,9 @@ export const sendFeedbackMessage = (p: {
 export const changeFeedbackStatus = (p: { requestId: string; status: FeedbackStatus; adminKey: string }) =>
   post({ action: 'status', ...p });
 
+export const deleteFeedbackRequest = (p: { requestId: string; adminKey: string }) =>
+  post({ action: 'delete', ...p });
+
 // 서버가 {ok: 키일치여부}를 200으로 주고, post()의 스프레드가 data.ok로 덮어쓰므로 그대로 신뢰 가능
 export const verifyAdminKey = async (adminKey: string): Promise<boolean> =>
   (await post({ action: 'verify', adminKey })).ok === true;

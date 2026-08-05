@@ -29,6 +29,12 @@ export interface ShipmentByOption {
   channelGroup: ChannelGroup;
   qty: number;
 }
+export interface ShipmentByProductWeek {
+  week: string; // 그 주 월요일 YYYY-MM-DD
+  name: string;
+  channelGroup: ChannelGroup;
+  qty: number;
+}
 
 export interface ShipmentData {
   range: { start: string; end: string };
@@ -39,6 +45,8 @@ export interface ShipmentData {
   byProduct: ShipmentByProduct[];
   byProductMonth: ShipmentByProductMonth[];
   byOption: ShipmentByOption[];
+  /** ?weekly=1로 조회했을 때만 존재 (세일즈 뷰 전용) */
+  byProductWeek?: ShipmentByProductWeek[];
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -56,8 +64,9 @@ export const fetchShipments = async (
   start?: string,
   end?: string,
   force = false,
+  weekly = false,
 ): Promise<ShipmentData | null> => {
-  const key = `${start || ''}~${end || ''}`;
+  const key = `${start || ''}~${end || ''}~${weekly ? 'w' : ''}`;
   if (!force && cache && cache.key === key && Date.now() - cache.ts < CACHE_TTL) {
     return cache.data;
   }
@@ -68,6 +77,7 @@ export const fetchShipments = async (
       const params = new URLSearchParams();
       if (start) params.set('start', start);
       if (end) params.set('end', end);
+      if (weekly) params.set('weekly', '1');
       const qs = params.toString();
       const response = await fetch(`${API_BASE_URL}/shipments${qs ? `?${qs}` : ''}`);
       if (!response.ok) {

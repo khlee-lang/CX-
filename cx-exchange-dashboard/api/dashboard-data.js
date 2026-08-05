@@ -1,4 +1,5 @@
 import { createDoc, getJwt, SPREADSHEET_ID } from './_sheets.js';
+import feedbackHandler from './_feedback.js';
 
 // 재고관리 시트 J열은 재고수량이 수식으로 채워지는 열인데, 헤더행(1행)에
 // 이름이 없어서 google-spreadsheet 라이브러리(row.get(header))로는 못 읽는다.
@@ -14,6 +15,10 @@ async function fetchStockColumn() {
 }
 
 export default async function handler(req, res) {
+  // Vercel Hobby 함수 12개 제한 → 수정요청(피드백) API를 이 함수에 합치고
+  // ?resource=feedback 으로 분기한다 (exchange-history.js와 동일 패턴).
+  if (req.query.resource === 'feedback') return feedbackHandler(req, res);
+
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   try {

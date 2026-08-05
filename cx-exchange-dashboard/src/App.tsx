@@ -13,12 +13,15 @@ import { ReportCenter } from './pages/ReportCenter';
 import { PantosOps } from './pages/PantosOps';
 import { ReturnizeUpload } from './pages/ReturnizeUpload';
 import { Landing } from './pages/Landing';
+import { SalesView } from './pages/SalesView';
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Landing />} />
+        {/* 세일즈팀 전용 화면 — CX 운영 사이드바(Layout) 없이 독립 렌더 */}
+        <Route path="sales" element={<SalesView />} />
         <Route element={<Layout />}>
           <Route path="dashboard" element={<OverviewDashboard />} />
           <Route path="jasa-exchange" element={<JasaMallExchange />} />

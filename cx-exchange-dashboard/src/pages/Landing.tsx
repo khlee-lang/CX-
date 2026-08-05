@@ -10,11 +10,8 @@ const EASE = 'cubic-bezier(0.76,0,0.24,1)';
 type NavItem = { label: string; to?: string };
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Projects' },
-  { label: 'Expertise' },
-  { label: 'Studio' },
-  { label: 'Insights' },
   { label: 'CX 대시보드', to: '/dashboard' },
+  { label: 'SALES', to: '/sales' },
   { label: '미희' },
   { label: '나연' },
   { label: '한슬' },

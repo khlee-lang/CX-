@@ -50,6 +50,12 @@ const QUERIES = {
   byOption: `${BASE_CTE}
     SELECT name, color, size, channel_group AS channelGroup, SUM(stockout_cnt) AS qty
     FROM base GROUP BY 1, 2, 3, 4`,
+  // 세일즈 뷰(주차별 SKU 교환율) 전용 — ?weekly=1일 때만 조회.
+  // 주 시작 = 월요일 (프론트 controlChart/salesView의 주 버킷과 동일 기준).
+  byProductWeek: `${BASE_CTE}
+    SELECT CAST(DATE_TRUNC(d, WEEK(MONDAY)) AS STRING) AS week, name,
+           channel_group AS channelGroup, SUM(stockout_cnt) AS qty
+    FROM base GROUP BY 1, 2, 3`,
 };
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
@@ -77,8 +83,10 @@ export default async function handler(req, res) {
   if (!YMD.test(start) || !YMD.test(end)) {
     return res.status(400).json({ error: '날짜 형식(YYYY-MM-DD)이 올바르지 않습니다.' });
   }
+  // 주차×상품 집계는 세일즈 뷰만 쓰므로 opt-in — 기존 페이지 응답을 안 불린다.
+  const weekly = req.query.weekly === '1';
 
-  const key = `${start}|${end}|${kstDateStr()}`;
+  const key = `${start}|${end}|${weekly ? 'w' : ''}|${kstDateStr()}`;
   if (cache && cache.key === key && Date.now() - cache.ts < TTL) {
     res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=86400');
     return res.json(cache.payload);
@@ -102,12 +110,13 @@ export default async function handler(req, res) {
         .query({ query, params: { start, end }, location: BQ_LOCATION })
         .then(([rows]) => rows);
 
-    const [byDay, byChannel, byProduct, byProductMonth, byOption] = await Promise.all([
+    const [byDay, byChannel, byProduct, byProductMonth, byOption, byProductWeek] = await Promise.all([
       run(QUERIES.byDay),
       run(QUERIES.byChannel),
       run(QUERIES.byProduct),
       run(QUERIES.byProductMonth),
       run(QUERIES.byOption),
+      weekly ? run(QUERIES.byProductWeek) : Promise.resolve(undefined),
     ]);
 
     const payload = {
@@ -119,6 +128,7 @@ export default async function handler(req, res) {
       byProduct,
       byProductMonth,
       byOption,
+      ...(weekly ? { byProductWeek } : {}),
     };
     cache = { key, ts: Date.now(), payload };
     res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=86400');

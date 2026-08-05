@@ -50,6 +50,13 @@ async function fetchStockColumn() {
   return data.values || [];
 }
 
+// ── 수정요청(피드백) — Vercel에선 dashboard-data?resource=feedback 로 서빙 ──
+app.all('/api/dashboard-data', async (req, res, next) => {
+  if (req.query.resource !== 'feedback') return next();
+  const { default: handler } = await import('../api/_feedback.js');
+  return handler(req, res);
+});
+
 // ── GET: 대시보드 전체 데이터 읽기 ─────────────────────────────
 app.get('/api/dashboard-data', async (req, res) => {
   try {

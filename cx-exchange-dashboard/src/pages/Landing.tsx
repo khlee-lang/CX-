@@ -11,7 +11,7 @@ const EASE = 'cubic-bezier(0.76,0,0.24,1)';
 type NavItem = { label: string; to: string; external?: boolean };
 
 const NAV_ITEMS: NavItem[] = [
-  { label: 'CX 대시보드', to: '/dashboard' },
+  { label: 'CX', to: '/dashboard' },
   { label: 'SALES', to: '/sales' },
   {
     label: '재입고 일정',
@@ -128,14 +128,14 @@ export const Landing: React.FC = () => {
               to="/dashboard"
               className="group inline-flex items-center gap-2 bg-black text-white rounded-full px-7 py-3 text-sm font-medium hover:bg-black/85 transition-colors duration-200"
             >
-              CX 대시보드
+              CX
               <ArrowRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5" />
             </Link>
             <Link
               to="/sales"
               className="group inline-flex items-center gap-2 border border-black/25 text-black rounded-full px-7 py-3 text-sm font-medium hover:bg-black/5 hover:border-black/60 transition-colors duration-200"
             >
-              세일즈 리포트
+              SALES
               <ArrowRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5" />
             </Link>
           </div>

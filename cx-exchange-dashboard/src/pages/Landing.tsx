@@ -28,15 +28,12 @@ export const Landing: React.FC = () => {
         muted
         playsInline
       />
-      {/* 밝은 하늘 배경에 흰 글씨가 묻히는 문제 때문에 상하 그라데이션을 덮는다 */}
-      <div className="absolute inset-0 bg-gradient-to-b from-black/45 via-black/20 to-black/40" />
-
       {/* Content layer */}
       <div className="relative z-10 flex flex-col h-full">
         {/* Navbar */}
         <header className="flex items-center justify-between px-6 md:px-12 lg:px-16 py-5 md:py-6">
           <div className="flex items-center gap-10">
-            <span className="text-white font-bold text-xl tracking-tight font-sans drop-shadow-md">Verish</span>
+            <span className="text-white font-semibold text-lg tracking-tight font-sans drop-shadow-md">Verish</span>
             <nav className="hidden lg:flex items-center gap-7 whitespace-nowrap">
               {NAV_ITEMS.map((item) => (
                 <Link
@@ -78,12 +75,10 @@ export const Landing: React.FC = () => {
           </button>
         </header>
 
-        {/* Hero — 한글이라 Instrument Serif(영문 전용) 대신 sans를 쓴다 */}
-        <div className="flex-1 flex flex-col items-center justify-start pt-6 sm:pt-8 md:pt-12 px-6 text-center">
-          <p className="text-white/80 text-[11px] md:text-xs font-bold tracking-[0.2em] uppercase mb-5 drop-shadow">
-            Verish CX Operations
-          </p>
-          <h1 className="font-sans font-extrabold text-white text-3xl sm:text-4xl md:text-5xl lg:text-[3.4rem] leading-[1.25] tracking-tight max-w-4xl drop-shadow-lg">
+        {/* Hero — 위치·크기·여백은 원본(영문 히어로) 그대로 두고 글자만 한국어로 교체.
+            단 Instrument Serif는 한글 글리프가 없어(폰트 폴백 발생) 제목만 sans로 쓴다. */}
+        <div className="flex-1 flex flex-col items-center justify-start pt-4 sm:pt-6 md:pt-8 lg:pt-10 px-6 text-center">
+          <h1 className="font-sans font-bold text-white text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[1.2] tracking-tight max-w-5xl">
             교환·반품 데이터를
             <br />
             매일 자동으로 모아
@@ -91,22 +86,23 @@ export const Landing: React.FC = () => {
             한 화면에서 봅니다
           </h1>
 
-          <p className="mt-6 md:mt-7 text-white/85 text-sm md:text-base font-medium leading-relaxed max-w-xl drop-shadow">
-            자사몰과 외부몰의 교환 접수부터 출고까지 자동으로 수집·정리하고,
-            출고량 대비 교환율과 상품별 이상 신호를 함께 보여줍니다.
+          <p className="mt-4 md:mt-5 text-white/70 text-sm md:text-base font-light max-w-md leading-relaxed">
+            자사몰과 외부몰의 교환을 자동으로 모아
+            <br className="hidden sm:block" />
+            출고량 대비 교환율과 이상 신호를 보여줍니다.
           </p>
 
-          <div className="mt-8 md:mt-9 flex flex-col sm:flex-row items-center gap-3">
+          <div className="mt-5 md:mt-6 flex flex-col sm:flex-row items-center gap-4">
             <Link
               to="/dashboard"
-              className="group inline-flex items-center gap-2 bg-white text-black rounded-full px-7 py-3 text-sm font-bold hover:bg-white/90 transition-colors duration-200 shadow-lg"
+              className="group inline-flex items-center gap-2 bg-white text-black rounded-full px-7 py-3 text-sm font-medium hover:bg-white/90 transition-colors duration-200"
             >
               CX 대시보드
               <ArrowRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5" />
             </Link>
             <Link
               to="/sales"
-              className="group inline-flex items-center gap-2 border border-white/60 bg-white/10 backdrop-blur-sm text-white rounded-full px-7 py-3 text-sm font-bold hover:bg-white/20 hover:border-white transition-colors duration-200"
+              className="group inline-flex items-center gap-2 border border-white/40 text-white rounded-full px-7 py-3 text-sm font-medium hover:bg-white/10 hover:border-white/60 transition-colors duration-200"
             >
               세일즈 리포트
               <ArrowRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5" />
@@ -131,7 +127,7 @@ export const Landing: React.FC = () => {
           style={{ transitionTimingFunction: EASE }}
         >
           <div className="flex items-center justify-between px-6 py-5">
-            <span className="text-white font-bold text-xl tracking-tight font-sans">Verish</span>
+            <span className="text-white font-semibold text-lg tracking-tight font-sans">Verish</span>
             <button
               type="button"
               aria-label="메뉴 닫기"

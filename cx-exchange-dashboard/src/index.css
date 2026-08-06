@@ -17,9 +17,58 @@
   100% { left: 100%; width: 40%; }
 }
 
+/* ── 랜딩 브랜드 로고 모션 (2026-08-05, 배경 영상 대체) ──────────────
+   심볼이 아래를 향한 삼각형이라 "아래로 흐르는" 방향으로 모션을 맞췄다.
+   진입 애니메이션과 무한 float은 둘 다 transform을 쓰므로 요소를 2겹으로
+   나눠 서로 덮어쓰지 않게 한다(바깥=진입, 안쪽=float). */
+@keyframes verish-symbol-in {
+  from { opacity: 0; transform: translateY(-28px) scale(0.9); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes verish-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(10px); }
+}
+@keyframes verish-letter-in {
+  from { opacity: 0; transform: translateY(30px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+/* 심볼 뒤로 옅은 링이 퍼지는 효과 — 흰 배경만 두면 심심해서 넣음.
+   면(bg)으로 채우면 "회색 원 배경"처럼 투박해 보여서 테두리만 쓴다. */
+@keyframes verish-ripple {
+  0%   { transform: scale(0.7); opacity: 0.5; }
+  75%  { opacity: 0; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+
 @layer utilities {
   .animate-indeterminate-bar {
     animation: indeterminate-bar 1.1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  .verish-symbol-in {
+    animation: verish-symbol-in 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .verish-float {
+    /* 진입(1s)이 끝난 뒤부터 흔들리도록 지연을 준다 */
+    animation: verish-float 5s ease-in-out 1s infinite;
+  }
+  .verish-letter-in {
+    animation: verish-letter-in 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .verish-ripple {
+    animation: verish-ripple 4.5s ease-out 1.2s infinite;
+  }
+
+  /* 모션 최소화를 켠 사용자에게는 움직임을 끄고 최종 상태만 보여준다 */
+  @media (prefers-reduced-motion: reduce) {
+    .verish-symbol-in,
+    .verish-float,
+    .verish-letter-in,
+    .verish-ripple {
+      animation: none;
+    }
+    .verish-ripple { opacity: 0; }
   }
 
   .material-symbols-outlined {

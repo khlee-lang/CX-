@@ -9,10 +9,21 @@ const EASE = 'cubic-bezier(0.76,0,0.24,1)';
 
 // 실제로 들어갈 수 있는 화면만 남긴다(2026-08-05) — 예전 플레이스홀더(Projects/Expertise/
 // Studio/Insights, 미희/나연/한슬, Reach Out, Let's Talk)는 링크가 없어서 전부 제거.
-const NAV_ITEMS: { label: string; to: string }[] = [
+// external: 이 앱 외부(Cloud Run 등) 주소라 react-router Link가 아닌 <a>로 열어야 한다.
+type NavItem = { label: string; to: string; external?: boolean };
+
+const NAV_ITEMS: NavItem[] = [
   { label: 'CX 대시보드', to: '/dashboard' },
   { label: 'SALES', to: '/sales' },
+  {
+    label: '재입고 일정',
+    to: 'https://product-inbound-service-625681502302.asia-northeast3.run.app/',
+    external: true,
+  },
 ];
+
+const NAV_LINK_CLASS =
+  'text-white text-sm font-semibold tracking-tight drop-shadow-md hover:text-white/70 transition-colors duration-200';
 
 export const Landing: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -35,15 +46,23 @@ export const Landing: React.FC = () => {
           <div className="flex items-center gap-10">
             <span className="text-white font-semibold text-lg tracking-tight font-sans drop-shadow-md">Verish</span>
             <nav className="hidden lg:flex items-center gap-7 whitespace-nowrap">
-              {NAV_ITEMS.map((item) => (
-                <Link
-                  key={item.label}
-                  to={item.to}
-                  className="text-white text-sm font-semibold tracking-tight drop-shadow-md hover:text-white/70 transition-colors duration-200"
-                >
-                  {item.label}
-                </Link>
-              ))}
+              {NAV_ITEMS.map((item) =>
+                item.external ? (
+                  <a
+                    key={item.label}
+                    href={item.to}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={NAV_LINK_CLASS}
+                  >
+                    {item.label}
+                  </a>
+                ) : (
+                  <Link key={item.label} to={item.to} className={NAV_LINK_CLASS}>
+                    {item.label}
+                  </Link>
+                ),
+              )}
             </nav>
           </div>
 
@@ -75,24 +94,10 @@ export const Landing: React.FC = () => {
           </button>
         </header>
 
-        {/* Hero — 위치·크기·여백은 원본(영문 히어로) 그대로 두고 글자만 한국어로 교체.
-            단 Instrument Serif는 한글 글리프가 없어(폰트 폴백 발생) 제목만 sans로 쓴다. */}
-        <div className="flex-1 flex flex-col items-center justify-start pt-4 sm:pt-6 md:pt-8 lg:pt-10 px-6 text-center">
-          <h1 className="font-sans font-bold text-white text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[1.2] tracking-tight max-w-5xl">
-            교환·반품 데이터를
-            <br />
-            매일 자동으로 모아
-            <br />
-            한 화면에서 봅니다
-          </h1>
-
-          <p className="mt-4 md:mt-5 text-white/70 text-sm md:text-base font-light max-w-md leading-relaxed">
-            자사몰과 외부몰의 교환을 자동으로 모아
-            <br className="hidden sm:block" />
-            출고량 대비 교환율과 이상 신호를 보여줍니다.
-          </p>
-
-          <div className="mt-5 md:mt-6 flex flex-col sm:flex-row items-center gap-4">
+        {/* Hero — 제목·부제 문구는 제거(2026-08-05 강희님 요청). 배경 영상만 보이고
+            진입 버튼 2개만 남긴다. 문구가 없으니 버튼을 세로 중앙에 둔다. */}
+        <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+          <div className="flex flex-col sm:flex-row items-center gap-4">
             <Link
               to="/dashboard"
               className="group inline-flex items-center gap-2 bg-white text-black rounded-full px-7 py-3 text-sm font-medium hover:bg-white/90 transition-colors duration-200"
@@ -140,22 +145,38 @@ export const Landing: React.FC = () => {
           </div>
 
           <nav className="flex-1 flex flex-col justify-center px-6">
-            {NAV_ITEMS.map((item, i) => (
-              <Link
-                key={item.label}
-                to={item.to}
-                onClick={() => setMenuOpen(false)}
-                className={`block w-full text-center text-3xl sm:text-4xl font-sans font-extrabold text-white border-b border-white/10 py-5 transition-all duration-500 ${
-                  menuOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
-                }`}
-                style={{
-                  transitionTimingFunction: EASE,
-                  transitionDelay: menuOpen ? `${150 + i * 80}ms` : '0ms',
-                }}
-              >
-                {item.label}
-              </Link>
-            ))}
+            {NAV_ITEMS.map((item, i) => {
+              const cls = `block w-full text-center text-3xl sm:text-4xl font-sans font-extrabold text-white border-b border-white/10 py-5 transition-all duration-500 ${
+                menuOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
+              }`;
+              const style = {
+                transitionTimingFunction: EASE,
+                transitionDelay: menuOpen ? `${150 + i * 80}ms` : '0ms',
+              };
+              return item.external ? (
+                <a
+                  key={item.label}
+                  href={item.to}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setMenuOpen(false)}
+                  className={cls}
+                  style={style}
+                >
+                  {item.label}
+                </a>
+              ) : (
+                <Link
+                  key={item.label}
+                  to={item.to}
+                  onClick={() => setMenuOpen(false)}
+                  className={cls}
+                  style={style}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
           </nav>
         </div>
       </div>

@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 
 const VIDEO_URL =
-  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260622_204103_f607742e-09da-4cf5-bb06-4e67b0a531de.mp4';
+  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260328_083109_283f3553-e28f-428b-a723-d639c617eb2b.mp4';
+
+// 영상이 끝날 때 딱 끊기며 처음으로 튀는 게 보이므로, 시작/끝 0.5초를 페이드로 덮는다.
+const FADE_SEC = 0.5;
 
 const EASE = 'cubic-bezier(0.76,0,0.24,1)';
 
@@ -22,20 +25,56 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
+// 배경 영상이 밝아서(2026-08-05 교체) 흰 글씨는 안 보인다 → 검정/회색으로 전환.
 const NAV_LINK_CLASS =
-  'text-white text-sm font-semibold tracking-tight drop-shadow-md hover:text-white/70 transition-colors duration-200';
+  'text-[#6F6F6F] text-sm font-semibold tracking-tight hover:text-black transition-colors duration-200';
 
 export const Landing: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  // 재생 위치를 매 프레임 보고 시작/끝 0.5초 구간의 opacity를 직접 계산한다.
+  // 브라우저 loop 속성은 끝→처음이 하드컷이라, loop을 끄고 ended에서 수동 재시작한다.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    let raf = 0;
+    const tick = () => {
+      const { currentTime: t, duration: d } = video;
+      if (d > 0 && !Number.isNaN(d)) {
+        const fadeIn = Math.min(1, t / FADE_SEC);
+        const fadeOut = Math.min(1, Math.max(0, (d - t) / FADE_SEC));
+        video.style.opacity = String(Math.min(fadeIn, fadeOut));
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    const onEnded = () => {
+      video.style.opacity = '0';
+      window.setTimeout(() => {
+        video.currentTime = 0;
+        void video.play();
+      }, 100);
+    };
+    video.addEventListener('ended', onEnded);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      video.removeEventListener('ended', onEnded);
+    };
+  }, []);
 
   return (
-    <section className="relative w-full h-screen overflow-hidden">
-      {/* Background video */}
+    <section className="relative w-full h-screen overflow-hidden bg-black">
+      {/* Background video — loop 대신 ended 이벤트로 수동 재시작(위 useEffect 참고) */}
       <video
+        ref={videoRef}
         className="absolute inset-0 w-full h-full object-cover"
+        style={{ opacity: 0 }}
         src={VIDEO_URL}
         autoPlay
-        loop
         muted
         playsInline
       />
@@ -44,7 +83,7 @@ export const Landing: React.FC = () => {
         {/* Navbar */}
         <header className="flex items-center justify-between px-6 md:px-12 lg:px-16 py-5 md:py-6">
           <div className="flex items-center gap-10">
-            <span className="text-white font-semibold text-lg tracking-tight font-sans drop-shadow-md">Verish</span>
+            <span className="text-black font-semibold text-lg tracking-tight font-sans">Verish</span>
             <nav className="hidden lg:flex items-center gap-7 whitespace-nowrap">
               {NAV_ITEMS.map((item) =>
                 item.external ? (
@@ -74,19 +113,19 @@ export const Landing: React.FC = () => {
             className="lg:hidden flex flex-col items-end justify-center gap-1.5 w-8 h-8"
           >
             <span
-              className={`block h-[2px] w-6 bg-white rounded-full transition-transform duration-500 ${
+              className={`block h-[2px] w-6 bg-black rounded-full transition-transform duration-500 ${
                 menuOpen ? 'translate-y-[7px] rotate-45' : ''
               }`}
               style={{ transitionTimingFunction: EASE }}
             />
             <span
-              className={`block h-[2px] w-4 bg-white rounded-full transition-opacity duration-500 ${
+              className={`block h-[2px] w-4 bg-black rounded-full transition-opacity duration-500 ${
                 menuOpen ? 'opacity-0' : 'opacity-100'
               }`}
               style={{ transitionTimingFunction: EASE }}
             />
             <span
-              className={`block h-[2px] w-6 bg-white rounded-full transition-transform duration-500 ${
+              className={`block h-[2px] w-6 bg-black rounded-full transition-transform duration-500 ${
                 menuOpen ? '-translate-y-[7px] -rotate-45' : ''
               }`}
               style={{ transitionTimingFunction: EASE }}
@@ -107,7 +146,7 @@ export const Landing: React.FC = () => {
             </Link>
             <Link
               to="/sales"
-              className="group inline-flex items-center gap-2 border border-white/40 text-white rounded-full px-7 py-3 text-sm font-medium hover:bg-white/10 hover:border-white/60 transition-colors duration-200"
+              className="group inline-flex items-center gap-2 border border-black/30 bg-white/70 text-black rounded-full px-7 py-3 text-sm font-medium hover:bg-white hover:border-black/60 transition-colors duration-200"
             >
               세일즈 리포트
               <ArrowRight className="w-4 h-4 transition-transform duration-200 group-hover:translate-x-0.5" />

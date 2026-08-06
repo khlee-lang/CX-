@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { ChartCard } from './ChartCard';
 import { AXIS_PROPS, GRID_PROPS, TOOLTIP_CURSOR, TOOLTIP_STYLE, SERIES_COLORS, rateTooltipFormatter } from '../../lib/chartTheme';
-import { buildRateSeries, computeBand, BASELINE_START, type Granularity, type ChannelGroup, type RatePoint } from '../../lib/controlChart';
+import { buildRateSeries, computeBand, BASELINE_START, EXCHANGE_DATA_GAP, type Granularity, type ChannelGroup, type RatePoint } from '../../lib/controlChart';
 import type { ShipmentData } from '../../api/shipments';
 import type { ExchangeHistoryData } from '../../api/exchangeHistory';
 import { ControlChartDrilldown, type DrilldownTarget } from './ControlChartDrilldown';
@@ -104,9 +104,10 @@ export const ControlChart: React.FC<ControlChartProps> = ({
     <ChartCard
       title="교환율 관제 그래프"
       subtitle={
-        canDrilldown
+        (canDrilldown
           ? '점선=과거 데이터 기준 평균±2σ 밴드(2024-07~2025-12 76주 기준). 밴드를 벗어나면 점으로 강조되며, 클릭하면 상세를 볼 수 있습니다.'
-          : '점선=과거 데이터 기준 평균±2σ 밴드(2024-07~2025-12 76주 기준). 밴드를 벗어나면 점으로 강조됩니다.'
+          : '점선=과거 데이터 기준 평균±2σ 밴드(2024-07~2025-12 76주 기준). 밴드를 벗어나면 점으로 강조됩니다.') +
+        ` ${EXCHANGE_DATA_GAP.start}~${EXCHANGE_DATA_GAP.end}는 교환 기록이 유실되어 선이 끊깁니다(교환율 0%가 아니라 데이터 없음).`
       }
       actions={
         <div className="flex gap-1">

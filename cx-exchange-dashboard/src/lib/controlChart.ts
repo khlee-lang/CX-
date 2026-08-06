@@ -14,6 +14,8 @@ export interface RatePoint {
   rate: number | null; // %
   /** 해당 버킷이 통계 밴드 계산에 쓰인 "신뢰 구간" 안에 있는지 */
   inBaseline: boolean;
+  /** 교환 데이터 유실 구간(EXCHANGE_DATA_GAP)에 걸치는 버킷 — rate는 항상 null */
+  dataGap: boolean;
 }
 
 // 옛날 교환 히스토리 시작(2024-05-28) 직후 몇 주는 "교환 접수 관행이 막 시작된
@@ -23,6 +25,18 @@ export const BASELINE_START = '2024-07-22';
 // 히스토리 마지막 주(2026-01-05)는 반대로 "그 주 출고분 교환이 아직 다 안 들어온
 // 마지막 구간"이라 낮게 잡힌다 — 마지막 완전한 주까지만 기준선에 포함.
 export const BASELINE_END = '2025-12-29';
+
+/**
+ * 교환 데이터가 유실된 구간(강희님 확인, 2026-08-06: "1월 4월 데이터는 내가 잃어버려서 없어").
+ *
+ * 실측: 2026-01-06까지 정상 → 01-07~02월 0건 → 03월 1건 → 04월 398건(하루 18건, 정상 월의 약 10%)
+ * → 05-04부터 라이브 시트로 정상 복귀. 즉 이 구간은 "교환이 줄어든 것"이 아니라 "기록이 없는 것".
+ *
+ * 출고량(분모)은 BigQuery에 계속 있어서, 방치하면 교환율이 0%에 가깝게 그려져 실제로
+ * 급감한 것처럼 보인다. 그래서 이 구간에 걸치는 버킷은 rate를 null로 만들어
+ * 선을 끊고(ControlChart의 connectNulls={false}) "데이터 없음"으로 표시한다.
+ */
+export const EXCHANGE_DATA_GAP = { start: '2026-01-07', end: '2026-05-03' };
 
 interface DailyCount {
   exchangeCnt: number;
@@ -125,14 +139,21 @@ export const buildRateSeries = (
 
   return [...buckets.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([bucket, v]) => ({
-      bucket,
-      label: labelOf(bucket, granularity),
-      exchangeCnt: v.exch,
-      shippedQty: v.ship > 0 ? v.ship : null,
-      rate: v.ship > 0 ? (v.exch / v.ship) * 100 : null,
-      inBaseline: granularity === 'week' && bucket >= BASELINE_START && bucket <= BASELINE_END,
-    }));
+    .map(([bucket, v]) => {
+      // 유실 구간에 조금이라도 걸치면 교환건수가 실제보다 적어 교환율이 왜곡되므로
+      // 부분적으로 걸친 버킷까지 전부 "데이터 없음"으로 처리한다(보수적).
+      const range = bucketDateRange(bucket, granularity);
+      const dataGap = range.start <= EXCHANGE_DATA_GAP.end && range.end >= EXCHANGE_DATA_GAP.start;
+      return {
+        bucket,
+        label: labelOf(bucket, granularity),
+        exchangeCnt: v.exch,
+        shippedQty: v.ship > 0 ? v.ship : null,
+        rate: dataGap || v.ship <= 0 ? null : (v.exch / v.ship) * 100,
+        inBaseline: granularity === 'week' && bucket >= BASELINE_START && bucket <= BASELINE_END,
+        dataGap,
+      };
+    });
 };
 
 export interface Band {

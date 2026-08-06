@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { Link, NavLink } from 'react-router-dom';
 import { Icon } from '../ui/Icon';
 
 const INACTIVE_CLASS = "flex items-center gap-3 px-3 py-2.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800 rounded-lg transition-all";
@@ -22,6 +22,14 @@ export const Sidebar: React.FC = () => {
   return (
     <aside className="fixed left-0 top-0 h-full w-64 border-r border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-col p-4 gap-2 z-50">
       <div className="mb-8 px-2">
+        {/* 랜딩(홈)으로 복귀 — CX 페이지 안에서 나갈 길이 없던 것 보완(2026-08-05) */}
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1.5 mb-3 text-xs font-bold text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+        >
+          <Icon name="arrow_back" className="text-base leading-none" />
+          홈으로
+        </Link>
         <h1 className="text-xl font-black text-indigo-700 dark:text-indigo-500">CX Dashboard</h1>
         <p className="text-[10px] text-slate-400 dark:text-slate-400 font-bold uppercase tracking-widest">Verish Exchange System</p>
       </div>
@@ -61,17 +69,6 @@ export const Sidebar: React.FC = () => {
           </NavLink>
         </div>
       </nav>
-      
-      <div className="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-1">
-        <a className={INACTIVE_CLASS} href="#">
-          <Icon name="settings" />
-          <span className="text-sm tracking-tight">설정</span>
-        </a>
-        <a className={INACTIVE_CLASS} href="#">
-          <Icon name="logout" />
-          <span className="text-sm tracking-tight">로그아웃</span>
-        </a>
-      </div>
     </aside>
   );
 };

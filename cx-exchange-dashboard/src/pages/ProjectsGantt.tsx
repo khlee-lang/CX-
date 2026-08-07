@@ -33,6 +33,32 @@ const GROUP_H = 30;
 const AXIS_H = 46;
 const LABEL_W = 300;
 
+// ── 물음표 도움말 ─────────────────────────────────────────
+// 라벨은 짧게 두고(목표일/핵심 일정), 자세한 뜻은 여기서 설명한다.
+const HelpTip: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-flex items-center">
+      <button
+        type="button"
+        aria-label={`${title} 설명`}
+        onClick={() => setOpen((v) => !v)}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        className="w-4 h-4 rounded-full border border-slate-300 text-slate-400 text-[10px] font-bold leading-none flex items-center justify-center hover:border-indigo-400 hover:text-indigo-500 transition-colors"
+      >
+        ?
+      </button>
+      {open && (
+        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-10 w-56 max-w-[80vw] bg-slate-900 text-white rounded-xl px-3.5 py-3 shadow-xl">
+          <span className="block text-[11px] font-black mb-1">{title}</span>
+          <span className="block text-[11px] leading-relaxed text-slate-200">{children}</span>
+        </span>
+      )}
+    </span>
+  );
+};
+
 // ── 편집 모달 ─────────────────────────────────────────────
 const EMPTY_DRAFT: GanttTaskInput = {
   group: '', name: '', start: todayIso(), end: todayIso(),
@@ -146,15 +172,29 @@ const TaskModal: React.FC<{
             </div>
           </div>
 
-          <div className="flex gap-5">
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input type="checkbox" checked={!!t.milestone} onChange={(e) => set('milestone', e.target.checked)} />
-              마일스톤 (기간 0, ◆)
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input type="checkbox" checked={!!t.critical} onChange={(e) => set('critical', e.target.checked)} />
-              크리티컬 패스
-            </label>
+          <div className="flex gap-6">
+            <div className="flex items-center gap-1.5">
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input type="checkbox" checked={!!t.milestone} onChange={(e) => set('milestone', e.target.checked)} />
+                목표일 ◆
+              </label>
+              <HelpTip title="목표일 ◆">
+                며칠 걸리는 "일"이 아니라, 특정 날짜에 딱 일어나는 "사건"이에요.
+                승인·납품·권한 부여 같은 것. 켜면 종료일과 진행률 칸이 사라지고,
+                막대 대신 ◆ 하나로 찍힙니다.
+              </HelpTip>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input type="checkbox" checked={!!t.critical} onChange={(e) => set('critical', e.target.checked)} />
+                핵심 일정 ●
+              </label>
+              <HelpTip title="핵심 일정 ●">
+                이게 밀리면 뒤에 물린 일이 전부 같이 밀리는 작업이에요.
+                켜면 이름 옆에 보라색 점이 붙고, 앞뒤가 둘 다 켜져 있으면
+                그 사이 화살표가 굵은 실선으로 강조됩니다. 바쁠 때 먼저 할 일.
+              </HelpTip>
+            </div>
           </div>
 
           <div>
@@ -359,7 +399,7 @@ const GanttChart: React.FC<{
               const col = STATUS_COLOR[t.status] || STATUS_COLOR.queued;
               const label = [
                 t.name,
-                t.milestone ? `마일스톤 · ${t.start}` : `${t.start} → ${t.end}`,
+                t.milestone ? `목표일 · ${t.start}` : `${t.start} → ${t.end}`,
                 `상태: ${GANTT_STATUS_LABELS[t.status] || t.status}${t.progress > 0 ? ` · ${t.progress}%` : ''}`,
                 t.note,
               ].filter(Boolean).join('\n');
@@ -513,10 +553,18 @@ export const ProjectsGantt: React.FC = () => {
             </span>
           ))}
           <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
-            <span className="w-2.5 h-2.5 bg-slate-600 rotate-45 rounded-[1px]" /> 마일스톤
+            <span className="w-2.5 h-2.5 bg-slate-600 rotate-45 rounded-[1px]" /> 목표일
+            <HelpTip title="목표일 ◆">
+              며칠 걸리는 "일"이 아니라 특정 날짜에 딱 일어나는 "사건"이에요.
+              승인·납품·권한 부여 같은 것. 기간이 없어서 ◆ 하나로 찍힙니다.
+            </HelpTip>
           </span>
           <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" /> 크리티컬 패스
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" /> 핵심 일정
+            <HelpTip title="핵심 일정 ●">
+              이게 밀리면 뒤에 물린 일이 전부 같이 밀리는 작업이에요.
+              점끼리 이어진 화살표가 굵은 실선으로 강조됩니다. 바쁠 때 먼저 할 일.
+            </HelpTip>
           </span>
         </div>
 

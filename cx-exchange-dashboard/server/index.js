@@ -57,6 +57,13 @@ app.all('/api/dashboard-data', async (req, res, next) => {
   return handler(req, res);
 });
 
+// ── 프로젝트 간트 — Vercel에선 dashboard-data?resource=gantt 로 서빙 ──
+app.all('/api/dashboard-data', async (req, res, next) => {
+  if (req.query.resource !== 'gantt') return next();
+  const { default: handler } = await import('../api/_gantt.js');
+  return handler(req, res);
+});
+
 // ── GET: 대시보드 전체 데이터 읽기 ─────────────────────────────
 app.get('/api/dashboard-data', async (req, res) => {
   try {

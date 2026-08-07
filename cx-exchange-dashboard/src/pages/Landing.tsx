@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { VerishSymbol, WORD_LETTERS, WORD_VIEWBOX } from '../components/brand/verishLogo';
+import { useAdmin } from '../hooks/useAdmin';
 
 const EASE = 'cubic-bezier(0.76,0,0.24,1)';
 
@@ -20,12 +21,40 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
+// 관리자에게만 보이는 메뉴 (프로젝트 간트). SALES 수정요청과 같은 키를 공유하므로
+// SALES에서 이미 관리자면 홈에서도 자동으로 보인다.
+const ADMIN_NAV_ITEMS: NavItem[] = [{ label: '프로젝트', to: '/projects' }];
+
 // 배경이 흰색이라 흰 글씨는 안 보인다 → 검정/회색.
 const NAV_LINK_CLASS =
   'text-[#6F6F6F] text-sm font-semibold tracking-tight hover:text-black transition-colors duration-200';
 
 export const Landing: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const { isAdmin, login, logout } = useAdmin();
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
+  const [keyError, setKeyError] = useState('');
+  const [verifying, setVerifying] = useState(false);
+
+  const navItems = useMemo(
+    () => (isAdmin ? [...NAV_ITEMS, ...ADMIN_NAV_ITEMS] : NAV_ITEMS),
+    [isAdmin],
+  );
+
+  const submitKey = async () => {
+    if (!keyInput.trim() || verifying) return;
+    setVerifying(true);
+    setKeyError('');
+    const ok = await login(keyInput.trim());
+    setVerifying(false);
+    if (ok) {
+      setKeyModalOpen(false);
+      setKeyInput('');
+    } else {
+      setKeyError('키가 올바르지 않습니다.');
+    }
+  };
 
   return (
     <section className="relative w-full h-screen overflow-hidden bg-white">
@@ -36,7 +65,7 @@ export const Landing: React.FC = () => {
           <div className="flex items-center gap-10">
             <span className="text-black font-semibold text-lg tracking-tight font-sans">Verish</span>
             <nav className="hidden lg:flex items-center gap-7 whitespace-nowrap">
-              {NAV_ITEMS.map((item) =>
+              {navItems.map((item) =>
                 item.external ? (
                   <a
                     key={item.label}
@@ -142,6 +171,73 @@ export const Landing: React.FC = () => {
         </div>
       </div>
 
+      {/* 관리자 진입 — 우하단에 은은하게. 관리자면 배지 + 로그아웃으로 바뀐다 */}
+      <div className="absolute bottom-5 right-6 z-20 flex items-center gap-3">
+        {isAdmin ? (
+          <>
+            <span className="text-[11px] font-semibold text-black/50">관리자 모드</span>
+            <button
+              type="button"
+              onClick={logout}
+              className="text-[11px] font-semibold text-black/35 hover:text-black transition-colors duration-200"
+            >
+              해제
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => { setKeyModalOpen(true); setKeyError(''); }}
+            className="text-[11px] font-semibold text-black/25 hover:text-black/60 transition-colors duration-200"
+          >
+            관리자
+          </button>
+        )}
+      </div>
+
+      {/* 관리자 키 입력 모달 */}
+      {keyModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          onClick={() => setKeyModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl p-6 w-[320px]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm font-bold text-black mb-1">관리자 키</p>
+            <p className="text-xs text-black/45 mb-4">SALES 수정요청 관리자 키와 동일합니다.</p>
+            <input
+              type="password"
+              autoFocus
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void submitKey(); }}
+              placeholder="키 입력"
+              className="w-full border border-black/15 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:border-black/50 transition-colors"
+            />
+            {keyError && <p className="text-xs text-rose-600 mt-2">{keyError}</p>}
+            <div className="flex justify-end gap-2 mt-4">
+              <button
+                type="button"
+                onClick={() => setKeyModalOpen(false)}
+                className="text-xs font-semibold text-black/40 hover:text-black px-3 py-2 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitKey()}
+                disabled={verifying || !keyInput.trim()}
+                className="text-xs font-bold bg-black text-white rounded-xl px-4 py-2 disabled:opacity-40 hover:bg-black/85 transition-colors"
+              >
+                {verifying ? '확인 중…' : '확인'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile menu overlay */}
       <div className={`fixed inset-0 z-50 lg:hidden ${menuOpen ? '' : 'pointer-events-none'}`}>
         <div
@@ -171,7 +267,7 @@ export const Landing: React.FC = () => {
           </div>
 
           <nav className="flex-1 flex flex-col justify-center px-6">
-            {NAV_ITEMS.map((item, i) => {
+            {navItems.map((item, i) => {
               const cls = `block w-full text-center text-3xl sm:text-4xl font-sans font-extrabold text-white border-b border-white/10 py-5 transition-all duration-500 ${
                 menuOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'
               }`;

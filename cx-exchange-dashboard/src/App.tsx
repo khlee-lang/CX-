@@ -14,6 +14,7 @@ import { PantosOps } from './pages/PantosOps';
 import { ReturnizeUpload } from './pages/ReturnizeUpload';
 import { Landing } from './pages/Landing';
 import { SalesView } from './pages/SalesView';
+import { ProjectsGantt } from './pages/ProjectsGantt';
 
 function App() {
   return (
@@ -22,6 +23,8 @@ function App() {
         <Route path="/" element={<Landing />} />
         {/* 세일즈팀 전용 화면 — CX 운영 사이드바(Layout) 없이 독립 렌더 */}
         <Route path="sales" element={<SalesView />} />
+        {/* 관리자 전용 프로젝트 로드맵(간트) — 페이지 안에서 관리자 키 게이트 */}
+        <Route path="projects" element={<ProjectsGantt />} />
         <Route element={<Layout />}>
           <Route path="dashboard" element={<OverviewDashboard />} />
           <Route path="jasa-exchange" element={<JasaMallExchange />} />
